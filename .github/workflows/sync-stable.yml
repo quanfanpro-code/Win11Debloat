@@ -1,0 +1,72 @@
+name: 正式版同步与汉化检查
+
+on:
+  schedule:
+    - cron: '23 0 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: zh-cn-stable-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'quanfanpro-code/Win11Debloat' && github.ref == 'refs/heads/zh-CN'
+    runs-on: windows-latest
+    timeout-minutes: 25
+    env:
+      PYTHONIOENCODING: utf-8
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: 读取中文分支
+        uses: actions/checkout@v4
+        with:
+          ref: zh-CN
+          fetch-depth: 0
+      - name: 准备维护脚本运行环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: 配置同步提交身份
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+      - name: 检查维护程序
+        run: |
+          python Maintenance/维护测试.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python Maintenance/同步集成测试.py
+      - name: 拉取正式版并准备候选合并
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python Maintenance/维护中文版.py prepare
+      - name: 检查汉化变化
+        id: translation
+        if: steps.prepare.outcome == 'success'
+        continue-on-error: true
+        run: python Maintenance/维护中文版.py check
+      - name: 验证 Windows PowerShell 功能
+        id: pester
+        if: steps.prepare.outcome == 'success'
+        continue-on-error: true
+        shell: powershell
+        run: ./Scripts/Run-Tests.ps1 -Bootstrap
+      - name: 更新可用分支或发布待办报告
+        if: always() && steps.prepare.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TEST_RESULT: ${{ steps.pester.outcome }}
+        run: python Maintenance/维护中文版.py finish --tests "$env:TEST_RESULT"
+      - name: 保存检查报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zh-CN-sync-report
+          path: ${{ runner.temp }}/Win11Debloat-zh-CN-check
+          if-no-files-found: ignore
