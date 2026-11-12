@@ -48,12 +48,12 @@ jobs:
         run: python Maintenance/维护中文版.py prepare
       - name: 检查汉化变化
         id: translation
-        if: steps.prepare.outcome == 'success'
+        if: steps.prepare.outputs.checkable == 'true'
         continue-on-error: true
         run: python Maintenance/维护中文版.py check
       - name: 验证 Windows PowerShell 功能
         id: pester
-        if: steps.prepare.outcome == 'success'
+        if: steps.prepare.outputs.checkable == 'true'
         continue-on-error: true
         shell: powershell
         run: ./Scripts/Run-Tests.ps1 -Bootstrap

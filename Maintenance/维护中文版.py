@@ -16,6 +16,7 @@ UPSTREAM = 'https://github.com/Raphire/Win11Debloat.git'
 ISSUE_TITLE = '[自动同步] 正式版同步与汉化检查'
 STATE = 'Maintenance/同步状态.json'
 BASELINE = 'Maintenance/汉化基线.json'
+WORKFLOWS = '.github/workflows'
 
 
 def parse_json(text):
@@ -130,8 +131,12 @@ def check_translation(root, work):
     return issues
 
 
+def release_message(tag, sha):
+    return f'合并官方正式版 {tag}\n\nUpstream-release: {sha}'
+
+
 def prepare(root, work, release, upstream_url=UPSTREAM):
-    """只拉取正式版，保存候选合并；冲突时回到原中文提交。"""
+    """把正式版增量三方合并为中文版上的单父提交。"""
     state = read_json(root / STATE)
     tag = stable_tag(release)
     if git(root, 'status', '--porcelain', '--untracked-files=no').stdout.strip():
@@ -139,31 +144,47 @@ def prepare(root, work, release, upstream_url=UPSTREAM):
     git(root, 'fetch', '--no-tags', upstream_url, 'refs/tags/' + tag)
     sha = git(root, 'rev-parse', 'FETCH_HEAD^{commit}').stdout.strip()
     base = git(root, 'rev-parse', 'HEAD').stdout.strip()
-    if git(root, 'merge-base', '--is-ancestor', state['release_commit'], sha, check=False).returncode:
+    previous = state['release_commit']
+    if git(root, 'merge-base', '--is-ancestor', previous, sha, check=False).returncode:
         raise RuntimeError('正式版历史回退或改写，停止自动同步')
-    if tag == state['release_tag'] and sha != state['release_commit']:
+    if tag == state['release_tag'] and sha != previous:
         raise RuntimeError('同名正式版标签的提交发生变化，需人工确认')
-    git(root, 'push', 'origin', sha + ':refs/heads/upstream/stable')
-    info = {'tag': tag, 'sha': sha, 'base': base, 'update': tag != state['release_tag'], 'conflicts': [], 'candidate': None}
-    write_json(work / 'sync.json', info)
+    info = {'tag': tag, 'sha': sha, 'base': base, 'update': tag != state['release_tag'],
+            'conflicts': [], 'candidate': None, 'upstream_workflows': []}
     if info['update']:
+        common = git(root, 'merge-base', base, sha).stdout.strip()
+        # 初始中文版包含部分上游开发历史；压合发布后则以已同步的正式版为基准。
+        merge_base = common
+        if git(root, 'merge-base', '--is-ancestor', previous, common, check=False).returncode:
+            merge_base = previous
+        info['merge_base'] = merge_base
+        info['upstream_workflows'] = git(
+            root, 'diff', '--name-only', '-z', merge_base, sha, '--', WORKFLOWS
+        ).stdout.split('\0')[:-1]
         branch = f"sync/stable-{release['id']}-{base[:10]}"
         info['candidate'] = branch
         remote = git(root, 'ls-remote', '--heads', 'origin', 'refs/heads/' + branch).stdout.strip()
         if remote:
             git(root, 'fetch', 'origin', 'refs/heads/' + branch)
-            for ancestor in (base, sha):
-                if git(root, 'merge-base', '--is-ancestor', ancestor, 'FETCH_HEAD', check=False).returncode:
-                    raise RuntimeError('已有候选分支不包含当前基线和正式版，保留分支并停止')
+            imports = git(root, 'rev-list', '--first-parent', '--reverse', f'{base}..FETCH_HEAD').stdout.splitlines()
+            first = imports[0] if imports else None
+            if first is None or git(root, 'rev-parse', f'{first}^@').stdout.splitlines() != [base]:
+                raise RuntimeError('已有候选分支不基于当前中文提交，保留分支并停止')
+            if git(root, 'show', '-s', '--format=%B', first).stdout.strip() != release_message(tag, sha):
+                raise RuntimeError('已有候选分支不包含当前正式版的导入提交，保留分支并停止')
             git(root, 'switch', '-c', branch, 'FETCH_HEAD')
         else:
+            # 只使用上游快照作为三方合并输入，原始提交及其工作流历史不进入候选祖先。
+            source = git(root, 'commit-tree', f'{sha}^{{tree}}', '-p', merge_base,
+                         '-m', release_message(tag, sha)).stdout.strip()
             git(root, 'switch', '-c', branch)
-            merged = git(root, 'merge', '--no-ff', '--no-edit', sha, check=False)
+            merged = git(root, 'cherry-pick', '--empty=keep', source, check=False)
             if merged.returncode:
-                info['conflicts'] = git(root, 'diff', '--name-only', '--diff-filter=U').stdout.splitlines()
+                info['conflicts'] = git(root, 'diff', '--name-only', '-z', '--diff-filter=U').stdout.split('\0')[:-1]
                 if not info['conflicts']:
                     raise RuntimeError('合并失败：' + merged.stderr)
-                git(root, 'merge', '--abort')
+                git(root, 'cherry-pick', '--abort')
+    info['head'] = git(root, 'rev-parse', 'HEAD').stdout.strip()
     write_json(work / 'sync.json', info)
     return info
 
@@ -188,13 +209,27 @@ def publish_issue(body, failed):
 
 def finish(root, work, tests):
     info = read_json(work / 'sync.json')
+    if git(root, 'rev-parse', 'HEAD').stdout.strip() != info['head']:
+        raise RuntimeError('检查期间候选提交发生变化，停止发布')
     check = read_json(work / 'check.json') if (work / 'check.json').exists() else {'issues':['汉化检查未完成']}
     issues = check['issues'] + [f'合并冲突：{p}' for p in info['conflicts']]
     if tests != 'success':
         issues.append('测试未通过或未完整执行，禁止更新可用中文分支')
-    ready = can_publish(issues, tests, bool(info['conflicts']))
+    if git(root, 'status', '--porcelain', '--untracked-files=no').stdout.strip():
+        issues.append('检查期间工作区出现未提交修改，禁止更新可用中文分支')
+    candidate_pushed = False
     if info['update'] and not info['conflicts']:
-        git(root, 'push', 'origin', 'HEAD:refs/heads/' + info['candidate'])
+        outgoing = f"{info['base']}..HEAD"
+        if git(root, 'rev-list', '--merges', outgoing).stdout.strip():
+            raise RuntimeError('候选包含合并提交，须以当前中文提交为起点提交正式版增量')
+        # 检查将推送的每个提交，含后来又撤回的工作流修改。
+        paths = git(root, 'log', '--format=', '--name-only', '-z', outgoing, '--', WORKFLOWS).stdout.split('\0')
+        workflows = sorted(set(filter(None, paths)))
+        issues += [f'工作流需维护者审查并单独更新：{path}' for path in workflows]
+        if not workflows:
+            git(root, 'push', '--no-follow-tags', 'origin', 'HEAD:refs/heads/' + info['candidate'])
+            candidate_pushed = True
+    ready = can_publish(issues, tests, bool(info['conflicts']))
     if ready:
         state = read_json(root / STATE)
         month = datetime.now(timezone.utc).strftime('%Y-%m')
@@ -203,11 +238,14 @@ def finish(root, work, tests):
             write_json(root / STATE, state)
             git(root, 'add', '--', STATE)
             git(root, 'commit', '-m', '记录正式版同步与汉化检查通过：' + info['tag'])
-            git(root, 'push', 'origin', 'HEAD:refs/heads/zh-CN')
+            git(root, 'push', '--no-follow-tags', 'origin', 'HEAD:refs/heads/zh-CN')
     lines = ['# 正式版同步与汉化检查', '', f"官方正式版：{info['tag']}", f"官方提交：{info['sha']}", '',
         '结果：检查通过，中文分支可用。' if ready else '结果：需要处理以下项目，当前可用中文分支保持不变。']
     if info['candidate']:
-        lines += ['', f"候选分支：{info['candidate']}"]
+        status = '已同步至远端' if candidate_pushed else '本次未推送'
+        lines += ['', f"候选分支：{info['candidate']}（{status}）"]
+    if info['upstream_workflows']:
+        lines += ['', '上游正式版涉及的工作流文件', *['- ' + p for p in info['upstream_workflows']]]
     lines += ['', *['- ' + item for item in issues]]
     body = '\n'.join(lines) + '\n'
     (work / '报告.md').write_text(body, encoding='utf-8-sig')
@@ -240,6 +278,9 @@ def main():
         if args.mode == 'prepare':
             release = api('repos/Raphire/Win11Debloat/releases/latest')
             info = prepare(args.root, args.work, release)
+            if os.environ.get('GITHUB_OUTPUT'):
+                with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+                    output.write(f"checkable={str(not info['conflicts']).lower()}\n")
             print(f"正式版 {info['tag']}，需要同步：{info['update']}，冲突：{bool(info['conflicts'])}")
         else:
             return 0 if finish(args.root, args.work, args.tests) else 1

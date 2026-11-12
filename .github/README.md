@@ -19,7 +19,7 @@
 ## 自动更新如何工作
 
 1. GitHub Actions 每天北京时间约 08:23 检查一次，也可在“正式版同步与汉化检查”页面点击 Run workflow 手动检查；GitHub 排队时可能延迟。
-2. 官方正式版原始代码同步到 `upstream/stable`，与中文版合并的结果放入 `sync/stable-…` 候选分支。
+2. 从官方仓库拉取正式版标签，使用 Git 三方合并将增量提交到基于 `zh-CN` 的 `sync/stable-…` 候选分支。待发布的提交涉及工作流文件时，报告列出需单独审核的路径。历史镜像 `upstream/stable` 退出自动同步。
 3. 检查新增、删除和变化的英文原文、缺失或空白译文、占位符和重复 JSON 键。运行脚本、界面或功能目录发生变化时，会保守提示人工复核，避免漏掉尚未提取到语言文件的新文字。
 4. 汉化检查和 Windows PowerShell 测试全部通过，才自动更新可用的 `zh-CN` 分支。发生冲突或需要补译时，生成中文 Issue 和检查报告，保持当前可用版本。
 5. 每月写入一次检查日期以维持仓库活动。该任务在 GitHub 上运行，不需要本机开机，也不需要付费 AI 接口。
@@ -28,7 +28,23 @@
 
 ## 维护汉化
 
-收到待办后，在对应候选分支完成翻译与源码文字复核，先提交已复核的修改，再运行：
+工作流文件出现变更时，先审查上游版本。需要采用的改动应由维护者作为仅含工作流文件的提交单独并入 `zh-CN`，保留本仓库的同步工作流。随后启动一次新的同步检查。候选代码和正式版记录由后续检查通过后更新。
+
+出现合并冲突时，用报告附件 `sync.json` 中的 `tag`、`sha`、`base`、`merge_base` 和 `candidate` 重建候选。以下变量取自最新一次检查，先确认 `base` 仍是远端中文分支头：
+
+```powershell
+git fetch origin zh-CN
+if ((git rev-parse origin/zh-CN) -ne $base) { throw '请重新运行同步并使用最新报告' }
+git fetch --no-tags https://github.com/Raphire/Win11Debloat.git "refs/tags/$tag"
+if ((git rev-parse 'FETCH_HEAD^{commit}') -ne $sha) { throw '官方标签与报告不符' }
+git switch -c $candidate $base
+$delta = git commit-tree "${sha}^{tree}" -p $mergeBase -m "合并官方正式版 $tag" -m "Upstream-release: $sha"
+git cherry-pick --empty=keep $delta
+```
+
+将 `merge_base` 赋给 `$mergeBase`。逐项处理冲突并暂存文件，用 `git cherry-pick --continue` 保留导入提交的原始提交说明。把解决结果和后续人工修改以普通提交推送到报告列出的候选分支。
+
+在候选分支完成翻译与源码文字复核，先提交已复核的修改，再运行：
 
 ```powershell
 python Maintenance/维护中文版.py baseline
