@@ -28,7 +28,7 @@ function Show-RestoreBackupDialog {
 
     Add-Type -AssemblyName PresentationFramework,PresentationCore,WindowsBase | Out-Null
 
-    $usesDarkMode = Get-SystemUsesDarkMode
+    $usesDarkMode = Get-AppUsesDarkMode
     $ownerWindow = if ($Owner) { $Owner } else { $script:GuiWindow }
 
     $overlay = $null
@@ -333,6 +333,7 @@ function Show-RestoreBackupDialog {
                 }
             }
             catch {
+                Write-Error "Failed to load registry backup '$($openDialog.FileName)': $($_.Exception.Message)" -ErrorAction Continue
                 Show-MessageBox -Owner $window -Title (Get-Translation -Key 'RestoreInvalidBackupTitle') -Message (Get-Translation -Key 'RestoreInvalidBackupMessage' -FormatArgs @($_.Exception.Message)) -Button 'OK' -Icon 'Error' | Out-Null
                 return
             }
@@ -408,7 +409,7 @@ function Show-RestoreBackupDialog {
             & $refreshStartMenuUi
         })
 
-        $nonRevertibleWikiLink.Add_MouseLeftButtonUp({
+        $nonRevertibleWikiLink.Add_Click({
             try {
                 Start-Process 'https://github.com/Raphire/Win11Debloat/wiki/Reverting-Changes' | Out-Null
             }

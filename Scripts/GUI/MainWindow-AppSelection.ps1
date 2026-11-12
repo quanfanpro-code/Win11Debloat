@@ -433,25 +433,41 @@ function Add-AppsToMainWindow {
         $checkbox.IsChecked = $app.IsChecked
         $checkbox.Style = $Window.Resources['AppsPanelCheckBoxStyle']
 
-        # Build table row: Recommendation dot | Name | Description | App ID
+        # Build table row: Recommendation indicator | Name | Description | App ID
         $row = New-Object System.Windows.Controls.Grid
         $row.Style = $Window.Resources['AppTableRowStyle']
         $c0 = New-Object System.Windows.Controls.ColumnDefinition; $c0.Width = $Window.Resources['AppTableDotColWidth']
         $c1 = New-Object System.Windows.Controls.ColumnDefinition; $c1.Width = $Window.Resources['AppTableNameColWidth']
+        $c1.SharedSizeGroup = 'AppTableName'
         $c2 = New-Object System.Windows.Controls.ColumnDefinition; $c2.Width = $Window.Resources['AppTableDescColWidth']
         $c3 = New-Object System.Windows.Controls.ColumnDefinition; $c3.Width = $Window.Resources['AppTableIdColWidth']
         $row.ColumnDefinitions.Add($c0); $row.ColumnDefinitions.Add($c1)
         $row.ColumnDefinitions.Add($c2); $row.ColumnDefinitions.Add($c3)
 
-        $dot = New-Object System.Windows.Shapes.Ellipse
-        $dot.Style = $Window.Resources['AppRecommendationDotStyle']
-        $dot.Fill = switch ($app.Recommendation) { 'safe' { $brushSafe } 'unsafe' { $brushUnsafe } default { $brushDefault } }
-        $dot.ToolTip = switch ($app.Recommendation) {
-            'safe'   { Get-Translation -Key 'AppLegendRecommendedTooltip' }
-            'unsafe' { Get-Translation -Key 'AppLegendNotRecommendedTooltip' }
-            default  { Get-Translation -Key 'AppLegendOptionalTooltip' }
+        $indicator = switch ($app.Recommendation) {
+            'safe' { New-Object System.Windows.Shapes.Ellipse }
+            'unsafe' {
+                $triangle = New-Object System.Windows.Shapes.Polygon
+                $triangle.Points = [System.Windows.Media.PointCollection]::Parse('0,9 4.5,0 9,9')
+                $triangle.Stretch = 'Fill'
+                $triangle
+            }
+            default {
+                $diamond = New-Object System.Windows.Shapes.Polygon
+                $diamond.Points = [System.Windows.Media.PointCollection]::Parse('4.5,0 9,4.5 4.5,9 0,4.5')
+                $diamond.Stretch = 'Fill'
+                $diamond
+            }
         }
-        [System.Windows.Controls.Grid]::SetColumn($dot, 0)
+        $indicator.Style = $Window.Resources['AppRecommendationIndicatorStyle']
+        $indicator.Fill = switch ($app.Recommendation) { 'safe' { $brushSafe } 'unsafe' { $brushUnsafe } default { $brushDefault } }
+        $recommendationKey = switch ($app.Recommendation) {
+            'safe'   { 'AppLegendRecommendedTooltip' }
+            'unsafe' { 'AppLegendNotRecommendedTooltip' }
+            default  { 'AppLegendOptionalTooltip' }
+        }
+        $indicator.SetResourceReference([System.Windows.FrameworkElement]::ToolTipProperty, "Language_$recommendationKey")
+        [System.Windows.Controls.Grid]::SetColumn($indicator, 0)
 
         $tbName = New-Object System.Windows.Controls.TextBlock
         $tbName.Text = $app.FriendlyName
@@ -470,7 +486,7 @@ function Add-AppsToMainWindow {
         $tbId.ToolTip = $app.AppIdDisplay
         [System.Windows.Controls.Grid]::SetColumn($tbId, 3)
 
-        $row.Children.Add($dot) | Out-Null
+        $row.Children.Add($indicator) | Out-Null
         $row.Children.Add($tbName) | Out-Null
         $row.Children.Add($tbDesc) | Out-Null
         $row.Children.Add($tbId) | Out-Null
@@ -481,6 +497,8 @@ function Add-AppsToMainWindow {
         Add-Member -InputObject $checkbox -MemberType NoteProperty -Name 'SelectedByDefault' -Value $app.SelectedByDefault
         Add-Member -InputObject $checkbox -MemberType NoteProperty -Name 'AppIds' -Value @($app.AppId)
         Add-Member -InputObject $checkbox -MemberType NoteProperty -Name 'AppIdDisplay' -Value $app.AppIdDisplay
+        Add-Member -InputObject $checkbox -MemberType NoteProperty -Name 'AppNameText' -Value $tbName
+        Add-Member -InputObject $checkbox -MemberType NoteProperty -Name 'AppDescriptionText' -Value $tbDesc
 
         $checkbox.Add_Checked({
             $w = $script:MainWindow
@@ -576,6 +594,8 @@ function Initialize-MainWindowApps {
     # Prevent concurrent loads
     if ($script:IsLoadingApps) { return }
     $script:IsLoadingApps = $true
+    $settingsButton = $Window.FindName('SettingsBtn')
+    if ($settingsButton) { $settingsButton.IsEnabled = $false }
 
     if ($ImportConfigBtn) {
         $ImportConfigBtn.IsEnabled = $false
@@ -624,6 +644,8 @@ function Initialize-MainWindowApps {
             }
             finally {
                 $script:IsLoadingApps = $false
+                $settingsButton = $Window.FindName('SettingsBtn')
+                if ($settingsButton) { $settingsButton.IsEnabled = $true }
             }
         }) | Out-Null
 }

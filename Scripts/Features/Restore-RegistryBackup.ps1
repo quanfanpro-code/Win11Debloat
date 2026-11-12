@@ -42,8 +42,9 @@ function Import-RegistryBackup {
 
     .DESCRIPTION
         Validates the structure and content of the supplied backup and converts
-        it into a normalized representation that can be safely consumed by the
-        restore workflow. Throws if validation fails.
+        it into a normalized representation for the restore workflow. Executable
+        content mismatches are returned in ExecutableValueWarnings for confirmation;
+        structural and authorization failures throw.
 
     .PARAMETER Backup
         The raw backup object (typically parsed from JSON) to normalize.
@@ -61,6 +62,7 @@ function ConvertTo-NormalizedRegistryBackup {
     )
 
     $errors = New-Object System.Collections.Generic.List[string]
+    $executableValueWarnings = New-Object 'System.Collections.Generic.List[object]'
 
     if (-not $Backup.PSObject.Properties['Version']) {
         $errors.Add((Get-Translation -Key 'BackupMissingProperty' -FormatArgs @('Version')))
@@ -139,7 +141,22 @@ function ConvertTo-NormalizedRegistryBackup {
     }
     else {
         try {
-            $allowListValidationErrors = @(Test-RegistryBackupMatchesSelectedFeatures -SelectedFeatureIds @($selectedFeatures) -SelectedUndoFeatureIds @($selectedUndoFeatures) -Target $normalizedTarget -RegistryKeys @($normalizedKeys))
+            $planErrors = New-Object System.Collections.Generic.List[string]
+            $planMap = Get-RegistryBackupValidationPlanMap -SelectedFeatureIds @($selectedFeatures) -SelectedUndoFeatureIds @($selectedUndoFeatures) -Target $normalizedTarget -Errors $planErrors
+            foreach ($planError in $planErrors) {
+                $errors.Add($planError)
+            }
+
+            if ($planErrors.Count -eq 0) {
+                $normalizedKeys = @(ConvertTo-CompatibleRegistryKeySnapshots -RegistryKeys @($normalizedKeys) -PlanMap $planMap)
+                $allowListValidationErrors = @(Test-RegistryBackupAgainstAllowList -RegistryKeys @($normalizedKeys) -PlanMap $planMap -ExecutableValueWarnings $executableValueWarnings)
+                if ($allowListValidationErrors.Count -eq 0) {
+                    Test-RegistryBackupSnapshotsCanBeRestored -RegistryKeys @($normalizedKeys)
+                }
+            }
+            else {
+                $allowListValidationErrors = @()
+            }
             foreach ($allowListValidationError in $allowListValidationErrors) {
                 $errors.Add([string]$allowListValidationError)
             }
@@ -169,6 +186,7 @@ function ConvertTo-NormalizedRegistryBackup {
         SelectedFeatures = @($selectedFeatures)
         SelectedUndoFeatures = @($selectedUndoFeatures)
         RegistryKeys = @($normalizedKeys)
+        ExecutableValueWarnings = @($executableValueWarnings.ToArray())
     }
 }
 
@@ -184,6 +202,10 @@ function ConvertTo-NormalizedRegistryBackup {
         A normalized backup object (as produced by ConvertTo-NormalizedRegistryBackup) whose
         RegistryKeys snapshots should be restored.
 
+    .PARAMETER ConfirmUntrustedValues
+        Receives the freshly validated executable mismatches before registry writes or hive
+        loading. Must return Boolean true after user confirmation; otherwise restore is canceled.
+
     .OUTPUTS
         PSCustomObject
         Returns an object with a Result property set to $true when the restore
@@ -192,14 +214,35 @@ function ConvertTo-NormalizedRegistryBackup {
 function Restore-RegistryBackupState {
     param(
         [Parameter(Mandatory)]
-        $Backup
+        $Backup,
+        # Return Boolean true only after the user explicitly accepts the displayed mismatches.
+        [scriptblock]$ConfirmUntrustedValues
     )
 
+    # Recompute warnings and blocking validation; backup-provided flags cannot authorize restoration.
+    $Backup = ConvertTo-NormalizedRegistryBackup -Backup $Backup
     $friendlyTarget = Get-FriendlyRegistryBackupTarget -Target ([string]$Backup.Target)
 
     if ($script:Params.ContainsKey("WhatIf")) {
         Write-Host (Get-ConsoleTranslation -Text '[WhatIf] Restore registry backup for {0}' -FormatArgs @($friendlyTarget)) -ForegroundColor Cyan
         return [PSCustomObject]@{ Result = $true }
+    }
+
+    if (@($Backup.ExecutableValueWarnings).Count -gt 0) {
+        Write-Host (Get-ConsoleTranslation -Text 'Registry restore for {0} requires confirmation of {1} unrecognized executable setting(s).' -FormatArgs @($friendlyTarget, @($Backup.ExecutableValueWarnings).Count)) -ForegroundColor Yellow
+        foreach ($mismatch in $Backup.ExecutableValueWarnings) {
+            Write-Host (Get-ConsoleTranslation -Text 'Unrecognized executable registry setting: {0}' -FormatArgs @(($mismatch | ConvertTo-Json -Compress -Depth 10)))
+        }
+        if (-not $ConfirmUntrustedValues) {
+            Write-Host (Get-ConsoleTranslation -Text 'Registry restore blocked: executable settings require explicit user confirmation.')
+            throw (Get-Translation -Key 'BackupExecutableConfirmationRequired')
+        }
+        $approved = & $ConfirmUntrustedValues $Backup.ExecutableValueWarnings
+        if ($approved -isnot [bool] -or -not $approved) {
+            Write-Host (Get-ConsoleTranslation -Text 'Registry restore canceled: user did not approve the unrecognized executable settings.')
+            return [PSCustomObject]@{ Result = $false }
+        }
+        Write-Host (Get-ConsoleTranslation -Text 'User approved restoring the unrecognized executable settings.')
     }
 
     $restoreAction = {

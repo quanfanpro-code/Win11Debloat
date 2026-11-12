@@ -13,7 +13,7 @@ function Show-AboutDialog {
     
     Add-Type -AssemblyName PresentationFramework,PresentationCore,WindowsBase | Out-Null
     
-    $usesDarkMode = Get-SystemUsesDarkMode
+    $usesDarkMode = Get-AppUsesDarkMode
     
     # Determine owner window
     $ownerWindow = if ($Owner) { $Owner } else { $script:GuiWindow }
@@ -68,12 +68,12 @@ function Show-AboutDialog {
     })
     
     # Project link click handler
-    $projectLink.Add_MouseLeftButtonDown({
+    $projectLink.Add_Click({
         Start-Process "https://github.com/Raphire/Win11Debloat"
     })
     
     # Ko-fi link click handler
-    $kofiLink.Add_MouseLeftButtonDown({
+    $kofiLink.Add_Click({
         Start-Process "https://ko-fi.com/raphire"
     })
     

@@ -1,4 +1,4 @@
-{
+﻿{
   "Features": {
     "RemoveApps": {
       "Label": "Remove the apps specified with the 'Apps' parameter",
@@ -9,7 +9,7 @@
       "ApplyText": "Removing selected apps"
     },
     "RemoveGamingApps": {
-      "Label": "Remove the Xbox App and Xbox Gamebar",
+      "Label": "Remove the Xbox App and Xbox Game Bar",
       "ApplyText": "Removing gaming related apps"
     },
     "RemoveHPApps": {
@@ -35,8 +35,8 @@
       "ApplyUndoText": "Enabling tips, tricks, suggestions and ads throughout Windows"
     },
     "DisableNotifications": {
-      "Label": "Disable Windows Notifications (From apps and other senders)",
-      "ToolTip": "Disables native Windows notifications from apps and other senders, this includes notifications from apps like Discord, WhatsApp, Teams, and Slack.",
+      "Label": "Disable Windows system and app notifications",
+      "ToolTip": "Disables native Windows system and app notifications, this includes notifications from apps like Discord, WhatsApp, Teams, and Slack.",
       "ApplyText": "Disabling Windows notifications and reminders",
       "UndoLabel": "Enable Windows notifications and reminders",
       "ApplyUndoText": "Enabling Windows notifications and reminders"
@@ -202,6 +202,13 @@
       "UndoLabel": "Enable AI features in Microsoft Edge",
       "ApplyUndoText": "Enabling AI features in Microsoft Edge"
     },
+    "DisableChromeAI": {
+      "Label": "Disable AI features in Google Chrome",
+      "ToolTip": "Disables Google Chrome's built-in AI tools and integrations, including Gemini, AI search & suggestions, writing assistance, autofill and more. It also removes local AI models. This feature uses policies, which will lock down certain settings.",
+      "ApplyText": "Disabling AI features in Google Chrome",
+      "UndoLabel": "Enable AI features in Google Chrome",
+      "ApplyUndoText": "Enabling AI features in Google Chrome"
+    },
     "DisablePaintAI": {
       "Label": "Disable AI features in Paint",
       "ToolTip": "This will turn off AI features in Paint, such as the AI-powered image generation and editing tools. This feature uses policies, which will lock down certain settings.",
@@ -222,13 +229,6 @@
       "ApplyText": "Enabling dark mode for system and apps",
       "UndoLabel": "Disable dark theme for system and apps",
       "ApplyUndoText": "Disabling dark mode for system and apps"
-    },
-    "DisableDragTray": {
-      "Label": "Disable 'Drag Tray' for sharing & moving files",
-      "ToolTip": "The Drag Tray is a new feature for sharing & moving files in Windows 11, it appears at the top of the screen when dragging files.",
-      "ApplyText": "Disabling Drag Tray",
-      "UndoLabel": "Enable 'Drag Tray' for sharing & moving files",
-      "ApplyUndoText": "Enabling Drag Tray"
     },
     "RevertContextMenu": {
       "Label": "Use classic Windows 10 context menu style",
@@ -415,8 +415,8 @@
       "ApplyText": "Setting the taskbar to show app icons on all taskbars"
     },
     "MMTaskbarModeMainActive": {
-      "Label": "Show app icons on main taskbar and on taskbar where the windows is open",
-      "ApplyText": "Setting the taskbar to show app icons on main taskbar and on taskbar where the windows is open",
+      "Label": "Show app icons on main taskbar and on taskbar where the window is open",
+      "ApplyText": "Setting the taskbar to show app icons on main taskbar and on taskbar where the window is open",
       "UndoLabel": "Show app icons on all taskbars",
       "ApplyUndoText": "Setting the taskbar to show app icons on all taskbars"
     },
@@ -471,16 +471,16 @@
     },
     "HideHome": {
       "Label": "Hide 'Home' from navigation pane",
-      "ToolTip": "Hides the 'Home' section from the File Explorer navigation pane.",
+      "ToolTip": "Hides the 'Home' section from the File Explorer navigation pane. Warning: This may prevent Quick access links from updating until you restart your PC or Windows Explorer.",
       "ApplyText": "Hiding the 'Home' section from the File Explorer navigation pane",
-      "UndoLabel": "Show 'Home' from navigation pane",
+      "UndoLabel": "Show 'Home' in navigation pane",
       "ApplyUndoText": "Showing the 'Home' section from the File Explorer navigation pane"
     },
     "HideGallery": {
       "Label": "Hide 'Gallery' from navigation pane",
       "ToolTip": "Hides the 'Gallery' section from the File Explorer navigation pane.",
       "ApplyText": "Hiding the 'Gallery' section from the File Explorer navigation pane",
-      "UndoLabel": "Show 'Gallery' from navigation pane",
+      "UndoLabel": "Show 'Gallery' in navigation pane",
       "ApplyUndoText": "Showing the 'Gallery' section from the File Explorer navigation pane"
     },
     "DisableTransparency": {
@@ -511,6 +511,13 @@
       "UndoLabel": "Allow automatic restarts after updates while signed in",
       "ApplyUndoText": "Allowing automatic restarts after updates while signed in"
     },
+    "DisableDriverUpdates": {
+      "Label": "Disable driver updates through Windows Update",
+      "ToolTip": "Prevents Windows from automatically downloading and installing driver updates via regular Windows quality updates. Windows can still automatically install drivers for new devices. Drivers included in security, critical, or feature updates may still be installed.",
+      "ApplyText": "Disabling driver updates through Windows Update",
+      "UndoLabel": "Enable driver updates through Windows Update",
+      "ApplyUndoText": "Enabling driver updates through Windows Update"
+    },
     "DisableDeliveryOptimization": {
       "Label": "Disable sharing downloaded updates with other PCs",
       "ToolTip": "This will prevent your PC from sharing downloaded updates with other PCs on the local network or on the internet. This also prevents your PC from downloading updates from other PCs.",
@@ -533,7 +540,7 @@
       "Label": "Hide 'OneDrive' from navigation pane",
       "ToolTip": "Hides the 'OneDrive' section from the File Explorer navigation pane.",
       "ApplyText": "Hiding the 'OneDrive' section from the File Explorer navigation pane",
-      "UndoLabel": "Show 'OneDrive' from navigation pane",
+      "UndoLabel": "Show 'OneDrive' in navigation pane",
       "ApplyUndoText": "Showing the 'OneDrive' section from the File Explorer navigation pane"
     },
     "Hide3dObjects": {
@@ -554,8 +561,8 @@
       "Label": "Add common folders back to 'This PC' page",
       "ToolTip": "This setting will add common folders like Desktop, Documents, Downloads, Music, Pictures and Videos back to the 'This PC' page in File Explorer.",
       "ApplyText": "Adding all common folders (Desktop, Downloads, etc.) back to 'This PC' in File Explorer",
-      "UndoLabel": "Remove common folders back to 'This PC' page",
-      "ApplyUndoText": "Removing all common folders (Desktop, Downloads, etc.) back to 'This PC' in File Explorer"
+      "UndoLabel": "Remove common folders from 'This PC' page",
+      "ApplyUndoText": "Removing all common folders (Desktop, Downloads, etc.) from 'This PC' in File Explorer"
     },
     "HideIncludeInLibrary": {
       "Label": "Hide 'Include in library' option in the context menu",
@@ -587,7 +594,7 @@
     },
     "EnableWindowsSandbox": {
       "Label": "Enable Windows Sandbox",
-      "ToolTip": "Windows Sandbox is a lightweight desktop environment for safely running applications in isolation. Software installed inside the Windows Sandbox environment remains 'sandboxed' and runs separately from the host machine. Only supported on Windows 11 Pro, Workstation, and Enterprise editions.",
+      "ToolTip": "Windows Sandbox is a lightweight desktop environment for safely running applications in isolation. Software installed inside the Windows Sandbox environment remains 'sandboxed' and runs separately from the host machine. Only supported on Windows 11 Pro, Workstation, Enterprise, and Education editions.",
       "ApplyText": "Enabling Windows Sandbox",
       "UndoLabel": "Disable Windows Sandbox",
       "ApplyUndoText": "Disabling Windows Sandbox"

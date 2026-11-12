@@ -33,12 +33,15 @@ function Show-MessageBox {
         [System.Windows.Window]$Owner = $null,
         
         [Parameter(Mandatory=$false)]
-        [int]$Width = 0
+        [int]$Width = 0,
+
+        [ValidateSet('OK', 'Cancel', 'Yes', 'No')]
+        [string]$DefaultResult
     )
     
     Add-Type -AssemblyName PresentationFramework,PresentationCore,WindowsBase | Out-Null
     
-    $usesDarkMode = Get-SystemUsesDarkMode
+    $usesDarkMode = Get-AppUsesDarkMode
     
     # Determine owner window - use provided Owner, or fall back to main GUI window
     $ownerWindow = if ($Owner) { $Owner } else { $script:GuiWindow }
@@ -93,7 +96,8 @@ function Show-MessageBox {
             default { [System.Windows.MessageBoxImage]::None }
         }
 
-        $nativeResult = [System.Windows.MessageBox]::Show($Message, $Title, $nativeButton, $nativeIcon)
+        $nativeDefault = if ($DefaultResult) { [System.Windows.MessageBoxResult]::$DefaultResult } else { [System.Windows.MessageBoxResult]::None }
+        $nativeResult = [System.Windows.MessageBox]::Show($Message, $Title, $nativeButton, $nativeIcon, $nativeDefault)
         return [string]$nativeResult
     }
     $reader = [System.Xml.XmlReader]::Create([System.IO.StringReader]::new($xaml))
@@ -189,6 +193,14 @@ function Show-MessageBox {
         }
     }
     
+    if ($DefaultResult) {
+        $useSecondButton = $DefaultResult -in @('Cancel', 'No')
+        $button1.IsDefault = -not $useSecondButton
+        $button2.IsDefault = $useSecondButton
+        $defaultButton = if ($useSecondButton) { $button2 } else { $button1 }
+        $msgWindow.Add_ContentRendered({ $null = $defaultButton.Focus() })
+    }
+
     # Title bar drag to move window
     $titleBar.Add_MouseLeftButtonDown({
         $msgWindow.DragMove()

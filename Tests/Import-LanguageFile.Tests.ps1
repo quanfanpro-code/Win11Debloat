@@ -4,12 +4,32 @@ BeforeAll {
     $script:LanguagesPath = Join-Path $PSScriptRoot 'TestData\LanguageLoading'
 }
 
+Describe 'Get-AvailableLanguageFolders' {
+    It 'lists complete folders in name order' {
+        @(Get-AvailableLanguageFolders | Select-Object -ExpandProperty Name) | Should -Be @('en-US', 'es-ES')
+    }
+
+    It 'excludes folders with a missing catalog or a directory in place of a catalog' {
+        $languagesPath = Join-Path $TestDrive 'Discovery'
+        New-Item -ItemType Directory -Path $languagesPath | Out-Null
+        foreach ($name in @('complete', 'missing', 'directory')) {
+            Copy-Item -LiteralPath (Join-Path $script:LanguagesPath 'en-US') -Destination (Join-Path $languagesPath $name) -Recurse
+        }
+        Remove-Item -LiteralPath (Join-Path $languagesPath 'missing/Apps.json')
+        Remove-Item -LiteralPath (Join-Path $languagesPath 'directory/Apps.json')
+        New-Item -ItemType Directory -Path (Join-Path $languagesPath 'directory/Apps.json') | Out-Null
+
+        @(Get-AvailableLanguageFolders -LanguagesPath $languagesPath | Select-Object -ExpandProperty Name) | Should -Be @('complete')
+        (Import-LanguageContent -LanguageFolder 'complete' -LanguagesPath $languagesPath).Apps.'TestApp.One'.FriendlyName | Should -Be 'Test App'
+    }
+}
+
 Describe 'Resolve-LanguageFolder' {
     It 'resolves <Case>' -ForEach @(
         @{ Case = 'an exact match'; LanguageCode = 'en-US'; Expected = 'en-US' }
         @{ Case = 'a second exact match'; LanguageCode = 'es-ES'; Expected = 'es-ES' }
         @{ Case = 'a language-prefix match when no exact folder exists'; LanguageCode = 'es-AR'; Expected = 'es-ES' }
-        @{ Case = 'an unrelated locale to the en-US fallback'; LanguageCode = 'fr-FR'; Expected = 'en-US' }
+        @{ Case = 'an unrelated locale to the en-US fallback'; LanguageCode = 'zz-ZZ'; Expected = 'en-US' }
     ) {
         Resolve-LanguageFolder -LanguageCode $LanguageCode | Should -Be $Expected
     }
@@ -44,7 +64,7 @@ Describe 'Import-LanguageFile' {
         # so there's no real fallback to warn about here, unlike the broken-folder case below.
         Mock Write-Warning {}
 
-        $lang = Import-LanguageFile -LanguageCode 'fr-FR'
+        $lang = Import-LanguageFile -LanguageCode 'zz-ZZ'
 
         $lang.LanguageCode | Should -Be 'en-US'
         Should -Invoke Write-Warning -Times 0 -Exactly
@@ -112,6 +132,73 @@ Describe 'Get-PluralCategory' {
         @{ Count = 5; Expected = 'other' }
     ) {
         Get-PluralCategory -LanguageCode 'en-US' -Count $Count | Should -Be $Expected
+    }
+
+    It 'returns other for <LanguageCode> with a count of <Count>' -ForEach @(
+        foreach ($languageCode in @('ja-JP', 'zh-CN')) {
+            foreach ($count in @(0, 1, 2, 5, 100)) {
+                @{ LanguageCode = $languageCode; Count = $count }
+            }
+        }
+    ) {
+        Get-PluralCategory -LanguageCode $LanguageCode -Count $Count | Should -Be 'other'
+    }
+
+    It 'returns <Expected> for a Portuguese count of <Count>' -ForEach @(
+        @{ Count = 0; Expected = 'one' }
+        @{ Count = 1; Expected = 'one' }
+        @{ Count = 2; Expected = 'other' }
+        @{ Count = 100; Expected = 'other' }
+        @{ Count = 999999; Expected = 'other' }
+        @{ Count = 1000000; Expected = 'many' }
+        @{ Count = 1000001; Expected = 'other' }
+        @{ Count = 2000000; Expected = 'many' }
+    ) {
+        Get-PluralCategory -LanguageCode 'pt-BR' -Count $Count | Should -Be $Expected
+    }
+
+    It 'returns <Expected> for a French count of <Count>' -ForEach @(
+        @{ Count = 0; Expected = 'one' }
+        @{ Count = 1; Expected = 'one' }
+        @{ Count = 2; Expected = 'other' }
+        @{ Count = 100; Expected = 'other' }
+        # CLDR puts whole millions in 'many'; this rule keeps them on 'other' on purpose,
+        # because the French catalogs have no '_many' keys and the loader falls back to the
+        # bare key rather than to '_other' when a category is missing.
+        @{ Count = 1000000; Expected = 'other' }
+    ) {
+        Get-PluralCategory -LanguageCode 'fr-FR' -Count $Count | Should -Be $Expected
+    }
+
+    It 'returns <Expected> for a Russian count of <Count>' -ForEach @(
+        @{ Count = 0; Expected = 'many' }
+        @{ Count = 1; Expected = 'one' }
+        @{ Count = 2; Expected = 'few' }
+        @{ Count = 4; Expected = 'few' }
+        @{ Count = 5; Expected = 'many' }
+        @{ Count = 11; Expected = 'many' }
+        @{ Count = 12; Expected = 'many' }
+        @{ Count = 14; Expected = 'many' }
+        @{ Count = 21; Expected = 'one' }
+        @{ Count = 22; Expected = 'few' }
+        @{ Count = 25; Expected = 'many' }
+        @{ Count = 101; Expected = 'one' }
+        @{ Count = 111; Expected = 'many' }
+        @{ Count = 122; Expected = 'few' }
+    ) {
+        Get-PluralCategory -LanguageCode 'ru-RU' -Count $Count | Should -Be $Expected
+    }
+
+    It 'returns other for a Korean count of <Count>' -ForEach @(
+        @{ Count = 0 }
+        @{ Count = 1 }
+        @{ Count = 2 }
+        @{ Count = 5 }
+        @{ Count = 11 }
+        @{ Count = 100 }
+        @{ Count = 1000000 }
+    ) {
+        Get-PluralCategory -LanguageCode 'ko-KR' -Count $Count | Should -Be 'other'
     }
 }
 
@@ -267,5 +354,13 @@ Describe 'ConvertTo-LocalizedXaml' {
         $xaml = '<TextBlock Text="%LANG:DisableTelemetry%"/>'
 
         { ConvertTo-LocalizedXaml -Xaml $xaml -Lang $script:EnLang } | Should -Throw '*DisableTelemetry*'
+    }
+
+    It 'emits live resource references while retaining missing-key and fallback validation' {
+        $xaml = '<Button Content="%LANG:TitleBarOptions%"/>'
+        ConvertTo-LocalizedXaml -Xaml $xaml -Lang $script:EsLang -DynamicResources |
+            Should -Be '<Button Content="{DynamicResource Language_TitleBarOptions}"/>'
+        { ConvertTo-LocalizedXaml -Xaml '<Button Content="%LANG:MissingKey%"/>' -Lang $script:EnLang -DynamicResources } |
+            Should -Throw '*MissingKey*'
     }
 }

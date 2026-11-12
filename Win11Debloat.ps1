@@ -25,19 +25,18 @@ param (
     [switch]$EnableWindowsSandbox,
     [switch]$EnableWindowsSubsystemForLinux,
     [switch]$DisableTelemetry,
-    [switch]$DisableSearchHistory,
     [switch]$DisableFastStartup,
     [switch]$DisableBitlockerAutoEncryption,
     [switch]$DisableModernStandbyNetworking,
     [switch]$DisableStorageSense,
     [switch]$DisableUpdateASAP,
     [switch]$PreventUpdateAutoReboot,
+    [switch]$DisableDriverUpdates,
     [switch]$DisableDeliveryOptimization,
     [switch]$DisableDeviceAutoAppDownload,
     [switch]$DisableBing,
     [switch]$DisableNotifications,
     [switch]$DisableStoreSearchSuggestions,
-    [switch]$DisableSearchHighlights,
     [switch]$DisableDesktopSpotlight,
     [switch]$HideDesktopSpotlightIcon,
     [switch]$EnableDesktopSpotlight,
@@ -71,6 +70,7 @@ param (
     [switch]$DisablePaintAI,
     [switch]$DisableNotepadAI,
     [switch]$DisableEdgeAI,
+	[switch]$DisableChromeAI,
     [switch]$DisableWidgets,
     [switch]$HideChat,
     [switch]$EnableEndTask,
@@ -80,7 +80,6 @@ param (
     [switch]$ClearStartAllUsers,
     [string]$ReplaceStartAllUsers,
     [switch]$RevertContextMenu,
-    [switch]$DisableDragTray,
     [switch]$DisableMouseAcceleration,
     [switch]$DisableStickyKeys,
     [switch]$DisableWindowSnapping,
@@ -183,21 +182,29 @@ if (-not $isAdmin) {
 }
 
 # Define script-level variables & paths
-$script:Version = "2026.08.24"
+$script:Version = "2026.10.30"
 $configPath = Join-Path $PSScriptRoot 'Config'
-$logsPath = Join-Path $PSScriptRoot 'Logs'
+# Deployment environments such as SCCM task sequences may not define LOCALAPPDATA.
+if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+    $script:UserDataPath = $PSScriptRoot
+}
+else {
+    $script:UserDataPath = Join-Path $env:LOCALAPPDATA 'Win11Debloat'
+}
+$script:LogsPath = Join-Path $script:UserDataPath 'Logs'
 $schemasPath = Join-Path $PSScriptRoot 'Schemas'
 $scriptsPath = Join-Path $PSScriptRoot 'Scripts'
 
 $script:AppsListFilePath = Join-Path $configPath 'Apps.json'
 $script:DefaultSettingsFilePath = Join-Path $configPath 'DefaultSettings.json'
 $script:FeaturesFilePath = Join-Path $configPath 'Features.json'
-$script:SavedSettingsFilePath = Join-Path $configPath 'LastUsedSettings.json'
+$script:SavedSettingsFilePath = Join-Path $script:UserDataPath 'LastUsedSettings.json'
+$script:UiPreferencesFilePath = Join-Path $script:UserDataPath 'Preferences.json'
 $script:LanguagesPath = Join-Path $configPath 'Languages'
 $script:DefaultLanguagePath = Join-Path $script:LanguagesPath 'en-US'
-$script:DefaultLogPath = Join-Path $logsPath 'Win11Debloat.log'
+$script:DefaultLogPath = Join-Path $script:LogsPath 'Win11Debloat.log'
 $script:RegfilesPath = Join-Path $PSScriptRoot 'Regfiles'
-$script:RegistryBackupsPath = Join-Path $PSScriptRoot 'Backups'
+$script:RegistryBackupsPath = Join-Path $script:UserDataPath 'Backups'
 $script:AssetsPath = Join-Path $PSScriptRoot 'Assets'
 $script:AppSelectionSchema = Join-Path $schemasPath 'AppSelectionWindow.xaml'
 $script:MainWindowSchema = Join-Path $schemasPath 'MainWindow.xaml'
@@ -414,6 +421,9 @@ if (-not $script:WingetInstalled -and -not $Silent) {
 
 # GUI functions
 . "$PSScriptRoot/Scripts/GUI/Get-SystemUsesDarkMode.ps1"
+. "$PSScriptRoot/Scripts/GUI/Ui-Preferences.ps1"
+. "$PSScriptRoot/Scripts/GUI/MainWindow-Localization.ps1"
+. "$PSScriptRoot/Scripts/GUI/Show-SettingsDialog.ps1"
 . "$PSScriptRoot/Scripts/GUI/Set-WindowThemeResources.ps1"
 . "$PSScriptRoot/Scripts/GUI/Attach-ShiftClickBehavior.ps1"
 . "$PSScriptRoot/Scripts/GUI/Apply-SettingsToUiControls.ps1"
@@ -443,6 +453,7 @@ if (-not $script:WingetInstalled -and -not $Silent) {
 . "$PSScriptRoot/Scripts/Helpers/Get-FriendlyRegistryBackupTarget.ps1"
 . "$PSScriptRoot/Scripts/Helpers/Get-FriendlyTargetUserName.ps1"
 . "$PSScriptRoot/Scripts/Helpers/Get-RebootFeatureLabels.ps1"
+. "$PSScriptRoot/Scripts/Helpers/Windows-BuildHelpers.ps1"
 . "$PSScriptRoot/Scripts/Helpers/Import-ConfigToParams.ps1"
 . "$PSScriptRoot/Scripts/Helpers/Test-ConfigConsistency.ps1"
 . "$PSScriptRoot/Scripts/Helpers/Get-TargetUserForAppRemoval.ps1"
@@ -474,9 +485,8 @@ $WinVersion = Get-ItemPropertyValue 'HKLM:\SOFTWARE\Microsoft\Windows NT\Current
 # Check if the machine supports Modern Standby, this is used to determine if the DisableModernStandbyNetworking option can be used
 $script:ModernStandbySupported = Test-ModernStandbySupport
 
-# Load the GUI's language content. -Language overrides the current user's system UI culture,
-# falling back to en-US either way if the requested language isn't available.
-$script:Lang = if ($Language) { Import-LanguageFile -LanguageCode $Language } else { Import-LanguageFile }
+# Explicit -Language takes precedence over saved UI preferences and the system culture.
+Initialize-UiPreferences -Language $Language
 
 # 命令行摘要与图形界面共用功能标签；应用标识与执行参数保持原值。
 foreach ($featureId in @($script:Features.Keys)) {

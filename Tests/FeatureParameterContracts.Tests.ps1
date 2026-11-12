@@ -30,13 +30,6 @@ Describe 'FeatureId parameter contracts' {
         $missing | Should -HaveCount 0 -Because ($missing -join ', ')
     }
 
-    It 'declares every FeatureId as a parameter on Scripts/Get.ps1' {
-        $parameterNames = Get-ScriptParameterNames -Path $script:GetScriptPath
-        $missing = @($script:Features.FeatureId | Where-Object { $parameterNames -notcontains $_ })
-
-        $missing | Should -HaveCount 0 -Because ($missing -join ', ')
-    }
-
     It 'keeps Scripts/Get.ps1 aligned with Win11Debloat.ps1 plus launcher-only switches' {
         $win11DebloatParameters = Get-ScriptParameterNames -Path $script:Win11DebloatPath
         $getParameters = Get-ScriptParameterNames -Path $script:GetScriptPath
@@ -88,5 +81,44 @@ Describe 'FeatureId parameter contracts' {
         )
 
         $missing | Should -HaveCount 0 -Because ($missing -join '; ')
+    }
+
+    It 'has an en-US Features translation with a Label for every FeatureId' {
+        $enUsPath = Join-Path $script:RepoRoot 'Config\Languages\en-US\Features.json'
+        $translations = (Get-Content -LiteralPath $enUsPath -Raw | ConvertFrom-Json).Features
+        $missing = @(
+            foreach ($feature in $script:Features) {
+                $entry = $translations.PSObject.Properties[$feature.FeatureId]
+                if ($null -eq $entry -or [string]::IsNullOrWhiteSpace($entry.Value.Label)) {
+                    $feature.FeatureId
+                }
+            }
+        )
+
+        $missing | Should -HaveCount 0 -Because ($missing -join ', ')
+    }
+
+    It 'accounts for every Win11Debloat.ps1 parameter as a FeatureId or a control parameter' {
+        $tokens = $null
+        $parseErrors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($script:Win11DebloatPath, [ref]$tokens, [ref]$parseErrors)
+        $parseErrors | Should -BeNullOrEmpty
+
+        $assignment = $ast.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq '$script:ControlParams'
+        }, $true)
+        $assignment | Should -Not -BeNullOrEmpty
+
+        $controlParameters = @(
+            $assignment.Right.FindAll({ param($node) $node -is [System.Management.Automation.Language.StringConstantExpressionAst] }, $true) |
+                ForEach-Object { $_.Value }
+        )
+        $unaccounted = @(
+            Get-ScriptParameterNames -Path $script:Win11DebloatPath |
+                Where-Object { $script:Features.FeatureId -notcontains $_ -and $controlParameters -notcontains $_ }
+        )
+
+        $unaccounted | Should -HaveCount 0 -Because ($unaccounted -join ', ')
     }
 }

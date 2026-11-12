@@ -2,6 +2,7 @@ BeforeAll {
     . (Join-Path $PSScriptRoot '..\Scripts\Helpers\Registry-PathHelpers.ps1')
     . (Join-Path $PSScriptRoot '..\Scripts\Helpers\Get-RegFileOperations.ps1')
     . (Join-Path $PSScriptRoot '..\Scripts\Helpers\User-HiveHelpers.ps1')
+    . (Join-Path $PSScriptRoot '..\Scripts\Helpers\Windows-BuildHelpers.ps1')
     . (Join-Path $PSScriptRoot '..\Scripts\Features\Invoke-Changes.ps1')
     . (Join-Path $PSScriptRoot '..\Scripts\Features\Backup-RegistryFeatureSelection.ps1')
     . (Join-Path $PSScriptRoot '..\Scripts\FileIO\Save-ToFile.ps1')
@@ -69,11 +70,11 @@ Describe 'New-RegistrySettingsBackup' {
         $script:RegistryBackupsPath = Join-Path $TestDrive 'Backups'
         $script:Features = @{ Feature = [PSCustomObject]@{ FeatureId = 'Feature'; RegistryKey = 'feature.reg' } }
         Mock Get-RegistryBackupPayload { @{ Version = '1.0' } }
-        Mock Save-ToFile { $true }
         Mock Write-Host {}
     }
 
     It 'returns null and does not write when no selected feature has registry data' {
+        Mock Save-ToFile { $true }
         $script:Features.Feature.RegistryKey = ''
 
         New-RegistrySettingsBackup -ActionableKeys @('Feature') | Should -BeNullOrEmpty
@@ -85,7 +86,7 @@ Describe 'New-RegistrySettingsBackup' {
 
         $result | Should -Match 'Win11Debloat-RegistryBackup-\d{8}_\d{6}\.json$'
         Test-Path -LiteralPath $script:RegistryBackupsPath | Should -BeTrue
-        Should -Invoke Save-ToFile -Times 1 -Exactly -ParameterFilter { $FilePath -eq $result -and $MaxDepth -eq 25 }
+        (Get-Content -LiteralPath $result -Raw | ConvertFrom-Json).Version | Should -Be '1.0'
     }
 
     It 'throws when persistence reports failure' {
@@ -105,6 +106,7 @@ Describe 'Add-RegistryPlanOperation' {
         $plan = $plans['hkey_current_user\software\example']
         $plan.IncludeSubKeys | Should -BeTrue
         $plan.CaptureAllValues | Should -BeTrue
+        $plan.AllowDeleteKey | Should -BeTrue
         $plan.ValueNames | Should -HaveCount 1
     }
 
@@ -155,6 +157,7 @@ Describe 'Get-RegistryBackupCapturePlans' {
         $plans[0].ValueNames | Should -Contain 'Enabled'
         $plans[0].ValueNames | Should -Contain 'Removed'
         $plans[0].ValueNames | Should -Not -Contain 'Ignored'
+        $plans[0].AllowDeleteKey | Should -BeFalse
     }
 
     It 'passes Sysprep selection through to registry-file resolution' {
@@ -208,12 +211,14 @@ Describe 'Get-RegistrySnapshotsForBackup' {
 
     It 'captures each plan directly for the current user' {
         $plans = @(
-            [PSCustomObject]@{ Path = 'HKEY_CURRENT_USER\Software\One'; CaptureAllValues = $true; ValueNames = @(); IncludeSubKeys = $true }
-            [PSCustomObject]@{ Path = 'HKEY_CURRENT_USER\Software\Two'; CaptureAllValues = $false; ValueNames = @('Value'); IncludeSubKeys = $false }
+            [PSCustomObject]@{ Path = 'HKEY_CURRENT_USER\Software\One'; CaptureAllValues = $true; ValueNames = @(); IncludeSubKeys = $true; AllowDeleteKey = $true }
+            [PSCustomObject]@{ Path = 'HKEY_CURRENT_USER\Software\Two'; CaptureAllValues = $false; ValueNames = @('Value'); IncludeSubKeys = $false; AllowDeleteKey = $false }
         )
 
         @(Get-RegistrySnapshotsForBackup -CapturePlans $plans) | Should -HaveCount 2
         Should -Invoke Get-RegistryKeySnapshot -Times 2 -Exactly
+        Should -Invoke Get-RegistryKeySnapshot -Times 1 -Exactly -ParameterFilter { $KeyPath -eq 'HKEY_CURRENT_USER\Software\One' -and $AllowDeleteKey }
+        Should -Invoke Get-RegistryKeySnapshot -Times 1 -Exactly -ParameterFilter { $KeyPath -eq 'HKEY_CURRENT_USER\Software\Two' -and -not $AllowDeleteKey }
         Should -Invoke Invoke-WithLoadedBackupHive -Times 0 -Exactly
     }
 

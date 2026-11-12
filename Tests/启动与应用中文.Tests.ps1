@@ -32,23 +32,24 @@ Describe '本地中文版完整性' {
         }
     }
 
-    It '141 个应用的说明全部含中文，应用标识与目录保持一致' {
+    It '当前应用目录的名称和说明全部含中文，应用标识与目录保持一致' {
         $apps=@(Import-AppDetailsFromJson)
-        $apps.Count | Should -Be 141
+        $catalog = Import-JsonFile -filePath $script:AppsListFilePath
+        $apps.Count | Should -Be @($catalog.Apps).Count
         foreach($app in $apps) {
             $app.Description | Should -Match '[\u4e00-\u9fff]'
             $app.FriendlyName | Should -Match '[\u4e00-\u9fff]'
         }
-        $catalog=Import-JsonFile -filePath $script:AppsListFilePath
         @($apps.AppId | Sort-Object) | Should -Be @($catalog.Apps.AppId | Sort-Object)
     }
 
     It '后台加载也保留中文名称和说明' {
         $script:GuiWindow=$null
         $apps=@(Invoke-AppDetailsFromJsonAsync)
-        $apps.Count | Should -Be 141
+        $catalog = Import-JsonFile -filePath $script:AppsListFilePath
+        $apps.Count | Should -Be @($catalog.Apps).Count
         ($apps | Where-Object { $_.AppId -contains 'Microsoft.WindowsCalculator' }).FriendlyName | Should -Be '计算器'
-        ($apps | Where-Object { $_.AppId -contains 'Clipchamp.Clipchamp' }).Description | Should -Be '微软出品的视频编辑器'
+        ($apps | Where-Object { $_.AppId -contains 'Clipchamp.Clipchamp' }).Description | Should -Be '创建和编辑视频，支持剪辑、字幕和音频'
     }
 
     It '应用预设显示中文并保留原应用编号' {

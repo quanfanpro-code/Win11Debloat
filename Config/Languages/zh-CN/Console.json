@@ -329,5 +329,18 @@
   "If you need further assistance, please open an issue at:": "如需进一步帮助，请在以下地址提交问题：",
   "PowerShell command failed": "PowerShell 命令执行失败",
   "Logged in {0}": "日志已记录到 {0}",
-  "Press any key to continue . . .": "请按任意键继续……"
+  "Press any key to continue . . .": "请按任意键继续……",
+  "Skipping {0} because its uninstall is already scheduled.": "已安排卸载 {0}，跳过重复请求。",
+  "new users": "新用户",
+  "Adding RunOnce uninstall for {0} for {1}...": "正在为{1}安排下次登录时卸载 {0}……",
+  "Failed to schedule uninstall task for {0} for user '{1}': {2}": "无法为用户“{1}”安排卸载 {0}：{2}",
+  "Please note: The default selection of apps includes Microsoft Teams, Spotify, Microsoft Sticky Notes and more. Select option 2 to verify and change what apps are removed by the script": "请注意，默认卸载列表包含 Microsoft Teams、Spotify、微软便笺等应用。选择 2 可以查看并修改卸载列表。",
+  "This release does not publish both Win11Debloat.zip and SHA256SUMS. Downloading the source archive without SHA-256 verification.": "该正式版未同时提供 Win11Debloat.zip 和 SHA256SUMS，将下载源码压缩包，无法进行 SHA-256 校验。",
+  "{0} does not list {1}.": "{0} 未列出 {1}。",
+  "The downloaded Win11Debloat archive does not match the SHA-256 checksum published with the release.": "下载的 Win11Debloat 压缩包与正式版公布的 SHA-256 校验值不符。",
+  "Registry restore for {0} requires confirmation of {1} unrecognized executable setting(s).": "还原 {0} 的注册表前，需要确认 {1} 项未识别的可执行设置。",
+  "Unrecognized executable registry setting: {0}": "未识别的可执行注册表设置：{0}",
+  "Registry restore blocked: executable settings require explicit user confirmation.": "已阻止注册表还原。可执行设置需要用户明确确认。",
+  "Registry restore canceled: user did not approve the unrecognized executable settings.": "已取消注册表还原。用户未批准还原未识别的可执行设置。",
+  "User approved restoring the unrecognized executable settings.": "用户已批准还原未识别的可执行设置。"
 }

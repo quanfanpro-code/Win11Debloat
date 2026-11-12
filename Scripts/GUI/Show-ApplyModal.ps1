@@ -20,7 +20,7 @@ function Show-ApplyModal {
     
     Add-Type -AssemblyName PresentationFramework,PresentationCore,WindowsBase | Out-Null
     
-    $usesDarkMode = Get-SystemUsesDarkMode
+    $usesDarkMode = Get-AppUsesDarkMode
     
     # Determine owner window
     $ownerWindow = if ($Owner) { $Owner } else { $script:GuiWindow }
@@ -186,6 +186,20 @@ function Show-ApplyModal {
                     }
                 }
             }
+            if ($script:WingetDeferredRemovals -and $script:WingetDeferredRemovals.Count -gt 0) {
+                foreach ($appName in @(Get-DeferredAppRemovalLabels)) {
+                    $tb = [System.Windows.Controls.TextBlock]::new()
+                    $label = Get-Translation -Key 'ApplyRebootRequiredWingetDeferred' -FormatArgs @($appName)
+                    $tb.Text = "$([char]0x2022) $label"
+                    $tb.FontSize = 12
+                    $tb.SetResourceReference([System.Windows.Controls.TextBlock]::ForegroundProperty, "AppFgColor")
+                    $tb.Opacity = 0.85
+                    $tb.Margin = [System.Windows.Thickness]::new(0, 2, 0, 0)
+                    $applyRebootList.Children.Add($tb) | Out-Null
+                }
+                $applyRebootPanel.Visibility = 'Visible'
+            }
+
             $applyWindow.Dispatcher.Invoke([System.Windows.Threading.DispatcherPriority]::Render, [action]{})
         }
         catch {

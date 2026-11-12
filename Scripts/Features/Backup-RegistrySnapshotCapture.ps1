@@ -66,6 +66,7 @@ function Get-RegistryBackupCapturePlans {
                 Path = $entry.Path
                 IncludeSubKeys = [bool]$entry.IncludeSubKeys
                 CaptureAllValues = [bool]$entry.CaptureAllValues
+                AllowDeleteKey = [bool]$entry.AllowDeleteKey
                 ValueNames = @($entry.ValueNames)
             }
         }
@@ -84,6 +85,7 @@ function Add-RegistryPlanOperation {
             Path = $Operation.KeyPath
             IncludeSubKeys = $false
             CaptureAllValues = $false
+            AllowDeleteKey = $false
             ValueNames = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
         }
     }
@@ -93,6 +95,7 @@ function Add-RegistryPlanOperation {
         'DeleteKey' {
             $plan.IncludeSubKeys = $true
             $plan.CaptureAllValues = $true
+            $plan.AllowDeleteKey = $true
         }
         'SetValue' {
             if (-not $plan.CaptureAllValues) {
@@ -145,7 +148,7 @@ function Get-RegistrySnapshotsForBackup {
 
         $snapshots = @()
         foreach ($plan in $plans) {
-            $snapshots += Get-RegistryKeySnapshot -KeyPath $plan.Path -CaptureAllValues:$plan.CaptureAllValues -ValueNames @($plan.ValueNames) -IncludeSubKeys:$plan.IncludeSubKeys
+            $snapshots += Get-RegistryKeySnapshot -KeyPath $plan.Path -CaptureAllValues:$plan.CaptureAllValues -ValueNames @($plan.ValueNames) -IncludeSubKeys:$plan.IncludeSubKeys -AllowDeleteKey:([bool]$plan.AllowDeleteKey)
         }
 
         return @($snapshots)
@@ -198,7 +201,8 @@ function Get-RegistryKeySnapshot {
         [string]$KeyPath,
         [bool]$CaptureAllValues = $false,
         [string[]]$ValueNames = @(),
-        [bool]$IncludeSubKeys = $false
+        [bool]$IncludeSubKeys = $false,
+        [bool]$AllowDeleteKey = $false
     )
 
     $registryParts = Split-RegistryPath -path $KeyPath
@@ -214,10 +218,19 @@ function Get-RegistryKeySnapshot {
     $subKeyPath = $registryParts.SubKey
     $key = $rootKey.OpenSubKey($subKeyPath, $false)
     if ($null -eq $key) {
+        # Value-only plans restore missing values, never the absence of the whole key.
+        # Preserve absence separately so trusted validation can authorize empty-key cleanup.
         return @{
             Path = $KeyPath
-            Exists = $false
-            Values = @()
+            Exists = -not $AllowDeleteKey
+            OriginallyAbsent = $true
+            Values = @(
+                if (-not $AllowDeleteKey) {
+                    foreach ($valueName in @($ValueNames | Sort-Object -Unique)) {
+                        @{ Name = $valueName; Exists = $false; Kind = $null; Data = $null }
+                    }
+                }
+            )
             SubKeys = @()
         }
     }

@@ -4,14 +4,6 @@
     .SYNOPSIS
     Removes one or more Windows app packages based on the target scope.
 
-    .DESCRIPTION
-    Iterates over the provided list of app identifiers and removes each one.
-    The removal method (winget vs. Appx cmdlets) is determined per-app from
-    Apps.json. A scheduled task is only created when the User or Sysprep
-    parameter was passed. After winget removal, the system is checked to 
-    confirm whether the app is still installed before reporting an error.
-    Returns early if the CancelRequested flag is set.
-
     .PARAMETER appsList
     An array of app package identifiers to remove (e.g. 'Microsoft.BingNews').
 
@@ -45,6 +37,7 @@ function Remove-SelectedApps {
     $edgeIds = @('Microsoft.Edge', 'XPFFTQ037JWMHS')
     $wingetRemovedApps = @()
     $wingetRemovalFailures = @{}
+    if (-not $script:WingetDeferredRemovals) { $script:WingetDeferredRemovals = @{} }
 
     Foreach ($app in $appsList) {
         if ($script:CancelRequested) { return $false }
@@ -55,12 +48,18 @@ function Remove-SelectedApps {
             & $script:ApplySubStepCallback (Get-Translation -Key 'RemovingAppsSubStep' -FormatArgs @($appIndex, $appCount)) $appIndex $appCount
         }
 
+        if ($script:WingetDeferredRemovals.ContainsKey($app)) {
+            Write-Host (Get-ConsoleTranslation -Text 'Skipping {0} because its uninstall is already scheduled.' -FormatArgs @($app))
+            continue
+        }
+
         Write-Host (Get-ConsoleTranslation -Text 'Removing {0}' -FormatArgs @($app))
 
         if ((Get-AppRemovalMethod $app) -eq 'WinGet') {
-            $removalSucceeded = Remove-WinGetApp -app $app
+            $schedulingFailed = $false
+            $removalSucceeded = Remove-WinGetApp -app $app -SchedulingFailed ([ref]$schedulingFailed)
             $wingetRemovedApps += $app
-            if (($script:Params.ContainsKey('User') -or $script:Params.ContainsKey('Sysprep')) -and -not $removalSucceeded) {
+            if ($schedulingFailed -or (($script:Params.ContainsKey('User') -or $script:Params.ContainsKey('Sysprep')) -and -not $removalSucceeded)) {
                 $wingetRemovalFailures[$app] = $true
             }
         }
@@ -76,6 +75,10 @@ function Remove-SelectedApps {
     }
 
     # Check whether any winget-removed apps are still present, and report errors for each one.
+    if ($wingetRemovedApps.Count -gt 0) {
+        $wingetRemovedApps = @($wingetRemovedApps | Where-Object { -not $script:WingetDeferredRemovals.ContainsKey($_) })
+    }
+
     if ($wingetRemovedApps.Count -gt 0) {
         $postRemovalList = if ($script:WingetInstalled) { Get-WingetInstalledApps -TimeOut 10 -NonBlocking } else { $null }
         $edgeForceRemoveRequested = $false
@@ -120,21 +123,15 @@ function Remove-SelectedApps {
     .SYNOPSIS
     Uninstalls an app via WinGet and/or schedules its removal.
 
-    .DESCRIPTION
-    Runs winget uninstall for a single app, with a bounded execution time.
-    WinGet's own exit code/success reporting is unreliable and is only logged
-    for diagnostics; it never causes this function to report failure. Callers
-    verify removal with a post-removal inventory check instead. This function
-    only reports failure when the winget invocation itself throws a terminating
-    error (e.g. it times out or cannot be started). If the User or Sysprep
-    parameter was passed, also schedules removal for future logins.
-
     .PARAMETER app
     The WinGet package ID to uninstall (e.g. 'Microsoft.BingNews').
 
     .PARAMETER TimeoutSeconds
     Maximum time to allow the foreground WinGet uninstall to run. Defaults
     to 120 seconds.
+
+    .PARAMETER SchedulingFailed
+    Optional reference indicating that required RunOnce scheduling was incomplete.
 
     .OUTPUTS
     System.Boolean. $true unless the winget invocation threw a terminating error
@@ -143,8 +140,11 @@ function Remove-SelectedApps {
 function Remove-WinGetApp {
     param(
         [string]$app,
-        [int]$TimeoutSeconds = 120
+        [int]$TimeoutSeconds = 120,
+        [ref]$SchedulingFailed
     )
+
+    if ($null -ne $SchedulingFailed) { $SchedulingFailed.Value = $false }
 
     if (-not $script:WingetInstalled) {
         Write-Error (Get-ConsoleTranslation -Text 'WinGet is either not installed or is outdated; {0} could not be removed' -FormatArgs @($app))
@@ -153,6 +153,9 @@ function Remove-WinGetApp {
 
     $uninstallCommandSucceeded = $true
     $exitCode = $null
+    $userScopeBlocked = $false
+    $scheduleSucceeded = $true
+    $runOnceTarget = $null
     try {
         $uninstallResult = Invoke-NonBlocking -ScriptBlock {
             param($appId)
@@ -165,27 +168,58 @@ function Remove-WinGetApp {
         Write-WinGetUninstallOutput -Output $(if ($uninstallResult) { $uninstallResult.Output } else { $null })
         $exitCode = if ($uninstallResult) { $uninstallResult.ExitCode } else { 'unknown' }
         Write-Verbose (Get-ConsoleTranslation -Text 'WinGet uninstall for {0} returned exit code {1}.' -FormatArgs @($app, $exitCode))
+
+        # WinGet reports APPINSTALLER_CLI_ERROR_ADMIN_CONTEXT_ACTION_PROHIBITED (0x8A15007D).
+        # Keep the English message check as a fallback for clients that don't return the specific code.
+        $userScopeBlocked = ([string]$exitCode -eq '-1978335107') -or ([string]$exitCode -match '^0x0?8A15007D$')
+        if (-not $userScopeBlocked) {
+            $userScopeBlocked = @($uninstallResult.Output | Where-Object {
+                $null -ne $_ -and $_.ToString() -match 'package installed for user scope cannot be uninstalled when running with administrator privileges'
+            }).Count -gt 0
+        }
+        if ($userScopeBlocked) {
+            $scheduleSucceeded = $false
+            $runOnceTarget = Get-RunOnceWingetTarget
+            $targetUserName = $runOnceTarget.UserName
+
+            $scheduleSucceeded = Set-RunOnceWingetTask -appId $app -Target $runOnceTarget
+            if ($scheduleSucceeded) {
+                if (-not $script:WingetDeferredRemovals) { $script:WingetDeferredRemovals = @{} }
+                $script:WingetDeferredRemovals[$app] = $targetUserName
+                if ($runOnceTarget.AllUsers) {
+                    Write-Host (Get-Translation -Key 'WingetAllUsersUninstallDeferred' -FormatArgs @($app)) -ForegroundColor Yellow
+                }
+                else {
+                    Write-Host (Get-Translation -Key 'WingetUserScopeUninstallDeferred' -FormatArgs @($app, $targetUserName)) -ForegroundColor Yellow
+                }
+            }
+        }
     }
     catch {
         $uninstallCommandSucceeded = $false
-        if ($_.Exception.Message -like (Get-ConsoleTranslation -Text 'Operation timed out after *')) {
-            Write-Verbose (Get-ConsoleTranslation -Text 'WinGet uninstall for {0} did not complete within {1} seconds: {2}' -FormatArgs @($app, $TimeoutSeconds, $_))
+        if ($_.Exception.Message -like 'Operation timed out after *') {
+            Write-Error (Get-ConsoleTranslation -Text 'WinGet uninstall for {0} did not complete within {1} seconds: {2}' -FormatArgs @($app, $TimeoutSeconds, $_))
         }
         else {
             Write-Verbose (Get-ConsoleTranslation -Text 'WinGet uninstall for {0} failed: {1}' -FormatArgs @($app, $_))
         }
     }
 
-    $scheduleSucceeded = $true
-    if ($script:Params.ContainsKey("User")) {
-        Write-Host (Get-ConsoleTranslation -Text 'Adding scheduled task to uninstall {0} for user {1}...' -FormatArgs @($app, $(Get-UserName)))
-        $scheduleSucceeded = Set-RunOnceWingetTask -appId $app
-    }
-    elseif ($script:Params.ContainsKey("Sysprep")) {
-        Write-Host (Get-ConsoleTranslation -Text 'Adding scheduled task to uninstall {0} for new users...' -FormatArgs @($app))
-        $scheduleSucceeded = Set-RunOnceWingetTask -appId $app
+    if (-not $userScopeBlocked -and
+        ($script:Params.ContainsKey('User') -or $script:Params.ContainsKey('Sysprep'))) {
+        $runOnceTarget = Get-RunOnceWingetTarget
+        $targetDescription = if ($runOnceTarget.AllUsers) { Get-ConsoleTranslation -Text 'all users' }
+            elseif ($script:Params.ContainsKey('Sysprep') -and -not $script:Params.ContainsKey('AppRemovalTarget')) { Get-ConsoleTranslation -Text 'new users' }
+            else { Get-ConsoleTranslation -Text 'user {0}' -FormatArgs @($runOnceTarget.UserName) }
+        Write-Host (Get-ConsoleTranslation -Text 'Adding RunOnce uninstall for {0} for {1}...' -FormatArgs @($app, $targetDescription))
+        $scheduleSucceeded = Set-RunOnceWingetTask -appId $app -Target $runOnceTarget
+        if ($scheduleSucceeded) {
+            if (-not $script:WingetDeferredRemovals) { $script:WingetDeferredRemovals = @{} }
+            $script:WingetDeferredRemovals[$app] = $runOnceTarget.UserName
+        }
     }
 
+    if ($null -ne $SchedulingFailed) { $SchedulingFailed.Value = -not $scheduleSucceeded }
     return ($uninstallCommandSucceeded -and $scheduleSucceeded)
 }
 
@@ -225,14 +259,47 @@ function Remove-AppxApp {
     param([string]$app, [string]$targetUser)
 
     $appPattern = '*' + $app + '*'
+    $isWindows10 = $script:WinVersion -ge 10240 -and $script:WinVersion -lt 22000
 
     try {
         $removalResult = Invoke-NonBlocking -ScriptBlock {
-            param($pattern, $target)
+            param($pattern, $target, $isWindows10)
 
             $removalErrors = @()
+            $ignoredRemovalMessages = [System.Collections.Generic.List[string]]::new()
+            $verificationWarnings = [System.Collections.Generic.List[string]]::new()
             $getPackageParams = @{ Name = $pattern; ErrorAction = 'Continue'; ErrorVariable = '+removalErrors' }
-            $removePackageParams = @{ ErrorAction = 'Continue'; ErrorVariable = '+removalErrors' }
+            $removePackageParams = @{ ErrorAction = 'Stop' }
+
+            # Windows 10 can report file-not-found after successfully removing an Appx package.
+            # Suppress it only after confirming the exact package is absent in the same scope.
+            function Test-IgnorableAppxRemovalError {
+                param($RemovalError, [string]$PackageName, [switch]$Provisioned)
+                if (-not ($isWindows10 -and ($RemovalError.Exception.HResult -eq -2147024894 -or
+                    $RemovalError.ToString() -match '\b0x80070002\b'))) {
+                    return $false
+                }
+
+                try {
+                    if ($Provisioned) {
+                        $remainingPackages = @(Get-AppxProvisionedPackage -Online -ErrorAction Stop |
+                            Where-Object { $_.PackageName -eq $PackageName })
+                    }
+                    else {
+                        $verificationParams = $getPackageParams.Clone()
+                        $verificationParams.Remove('ErrorVariable')
+                        $verificationParams.ErrorAction = 'Stop'
+                        $remainingPackages = @(Get-AppxPackage @verificationParams |
+                            Where-Object { $_.PackageFullName -eq $PackageName })
+                    }
+                    return ($remainingPackages.Count -eq 0)
+                }
+                catch {
+                    # An unsuccessful query cannot confirm removal; preserve the original error.
+                    $verificationWarnings.Add("Unable to verify removal of $PackageName (target: $target, provisioned: $Provisioned): $_")
+                    return $false
+                }
+            }
 
             switch ($target) {
                 'AllUsers' {
@@ -250,22 +317,54 @@ function Remove-AppxApp {
 
             foreach ($package in @(Get-AppxPackage @getPackageParams)) {
                 $removePackageParams.Package = $package.PackageFullName
-                $null = Remove-AppxPackage @removePackageParams
+                try {
+                    $null = Remove-AppxPackage @removePackageParams
+                }
+                catch {
+                    if (Test-IgnorableAppxRemovalError $_ -PackageName $package.PackageFullName) {
+                        $ignoredRemovalMessages.Add("Windows 10 Appx removal reported error 0x80070002 for $($package.PackageFullName), but the removal succeeded.")
+                    }
+                    else {
+                        Write-Error -ErrorRecord $_ -ErrorAction Continue -ErrorVariable +removalErrors
+                    }
+                }
             }
 
             if ($target -eq 'AllUsers') {
                 $provisionedPackages = @(Get-AppxProvisionedPackage -Online -ErrorAction Continue -ErrorVariable +removalErrors | Where-Object { $_.PackageName -like $pattern })
                 foreach ($package in $provisionedPackages) {
-                    $null = Remove-ProvisionedAppxPackage -Online -AllUsers -PackageName $package.PackageName -ErrorAction Continue -ErrorVariable +removalErrors
+                    try {
+                        $null = Remove-ProvisionedAppxPackage -Online -AllUsers -PackageName $package.PackageName -ErrorAction Stop
+                    }
+                    catch {
+                        if (Test-IgnorableAppxRemovalError $_ -PackageName $package.PackageName -Provisioned) {
+                            $ignoredRemovalMessages.Add("Windows 10 Appx removal reported error 0x80070002 for $($package.PackageName), but the removal succeeded.")
+                        }
+                        else {
+                            Write-Error -ErrorRecord $_ -ErrorAction Continue -ErrorVariable +removalErrors
+                        }
+                    }
                 }
             }
 
-            return [PSCustomObject]@{ Success = ($removalErrors.Count -eq 0) }
-        } -ArgumentList @($appPattern, $targetUser)
+            return [PSCustomObject]@{
+                Success = ($removalErrors.Count -eq 0)
+                IgnoredRemovalMessages = $ignoredRemovalMessages.ToArray()
+                VerificationWarnings = $verificationWarnings.ToArray()
+            }
+        } -ArgumentList @($appPattern, $targetUser, $isWindows10)
     }
     catch {
         Write-Error (Get-ConsoleTranslation -Text 'Unable to remove {0} via Appx: {1}' -FormatArgs @($app, $_))
         return $false
+    }
+
+    # Write in the caller's runspace so the active transcript captures these messages in GUI mode too.
+    foreach ($message in @($removalResult.IgnoredRemovalMessages)) {
+        if ($message) { Write-Host $message }
+    }
+    foreach ($message in @($removalResult.VerificationWarnings)) {
+        if ($message) { Write-Warning $message }
     }
 
     return [bool]($removalResult -and $removalResult.Success)
@@ -291,7 +390,7 @@ function Get-AppRemovalMethod {
         $script:AppRemovalMethodCache = @{}
         try {
             if (Test-Path $script:AppsListFilePath) {
-                $appsJson = Get-Content -Path $script:AppsListFilePath -Raw | ConvertFrom-Json
+                $appsJson = Get-Content -Path $script:AppsListFilePath -Raw -Encoding UTF8 | ConvertFrom-Json
                 foreach ($appData in $appsJson.Apps) {
                     $rawMethod = $appData.RemovalMethod
                     $method = if ($rawMethod -and $rawMethod -eq 'WinGet') { 'WinGet' } else { 'Appx' }
@@ -347,56 +446,178 @@ function Request-EdgeForceRemove {
 
 <#
     .SYNOPSIS
-    Dynamically sets a RunOnce registry key to schedule a winget uninstall.
+    Resolves the user scope for deferred WinGet uninstall tasks.
 
     .DESCRIPTION
-    Writes directly to HKEY_USERS\Default\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce
-    via the PowerShell registry API within Invoke-WithTargetUserHive,
+    Uses the selected app-removal target and launch parameters to determine
+    whether tasks apply to all users or a single user, including the Default profile.
+
+    .OUTPUTS
+    System.Management.Automation.PSCustomObject. AllUsers (Boolean) indicates
+    whether to schedule for all users. UserName (String) identifies the target
+    account or Default profile when AllUsers is false.
+#>
+function Get-RunOnceWingetTarget {
+    $appRemovalTarget = Get-TargetUserForAppRemoval
+    $hasExplicitAppRemovalTarget = $script:Params.ContainsKey('AppRemovalTarget')
+    $allUsers = $appRemovalTarget -eq 'AllUsers' -and (
+        $hasExplicitAppRemovalTarget -or
+        -not ($script:Params.ContainsKey('User') -or $script:Params.ContainsKey('Sysprep'))
+    )
+
+    $userName = if ($allUsers) {
+        Get-UserName
+    }
+    elseif ($hasExplicitAppRemovalTarget) {
+        if ($appRemovalTarget -ieq 'CurrentUser' -or $appRemovalTarget -ieq 'AllUsers') {
+            Get-UserName
+        }
+        else {
+            $appRemovalTarget
+        }
+    }
+    elseif ($script:Params.ContainsKey('Sysprep')) {
+        'Default'
+    }
+    else {
+        Get-UserName
+    }
+
+    return [PSCustomObject]@{
+        AllUsers = [bool]$allUsers
+        UserName = [string]$userName
+    }
+}
+
+<#
+    .SYNOPSIS
+    Returns the profile targets for deferred AllUsers WinGet uninstall tasks.
+
+    .DESCRIPTION
+    Lists resolvable accounts with non-special profiles containing NTUSER.DAT.
+    Includes Default so the task also applies to profiles created later.
+    Profiles whose SIDs cannot be resolved are skipped with a warning and mark
+    the result incomplete.
+
+    .OUTPUTS
+    System.Management.Automation.PSCustomObject. UserNames contains account names
+    and Default. Success is false if enumeration or any SID translation fails.
+#>
+function Get-RunOnceWingetTargetUserNames {
+    $targetUsers = New-Object 'System.Collections.Generic.List[string]'
+    $seenSids = @{}
+    $allSucceeded = $true
+
+    try {
+        foreach ($userProfile in @(Get-CimInstance -ClassName Win32_UserProfile -ErrorAction Stop)) {
+            if ($userProfile.Special -or [string]::IsNullOrWhiteSpace([string]$userProfile.SID) -or
+                [string]::IsNullOrWhiteSpace([string]$userProfile.LocalPath)) {
+                continue
+            }
+
+            $hivePath = Join-Path $userProfile.LocalPath 'NTUSER.DAT'
+            if (-not (Test-Path -LiteralPath $hivePath)) { continue }
+
+            $sid = [string]$userProfile.SID
+            if ($seenSids.ContainsKey($sid)) { continue }
+
+            try {
+                $accountName = ([System.Security.Principal.SecurityIdentifier]$sid).Translate(
+                    [System.Security.Principal.NTAccount]
+                ).Value
+            }
+            catch {
+                $allSucceeded = $false
+                Write-Warning "The deferred AllUsers WinGet uninstall may be incomplete: unable to resolve account name for profile SID '$sid'. This profile will not be scheduled. $_"
+                continue
+            }
+
+            $seenSids[$sid] = $true
+            $targetUsers.Add($accountName)
+        }
+    }
+    catch {
+        Write-Error "Unable to enumerate user profiles for deferred WinGet uninstall: $_"
+        return [PSCustomObject]@{ UserNames = @(); Success = $false }
+    }
+
+    # RunOnce values in the Default profile are copied into profiles created later.
+    $targetUsers.Add('Default')
+    return [PSCustomObject]@{ UserNames = @($targetUsers); Success = $allSucceeded }
+}
+
+<#
+    .SYNOPSIS
+    Dynamically sets RunOnce registry keys to schedule a winget uninstall.
+
+    .DESCRIPTION
+    Writes through Invoke-WithTargetUserHive,
     which handles hive loading and HKEY_USERS\Default → SID remapping.
     Used instead of static .reg files to avoid file dependency for each WinGet app.
 
-    The winget command is Base64-encoded and invoked via powershell.exe -EncodedCommand
-    rather than interpolated directly into cmd.exe /c. This prevents shell metacharacters
-    (such as &, |, <, >, ^, ") in the app ID from being interpreted as command syntax,
-    even if future catalog updates introduce IDs containing those characters.
+    Invokes winget.exe directly with a quoted app ID, without a shell wrapper.
+    Escapes embedded quotes and trailing backslashes for native argument parsing,
+    and rejects commands exceeding RunOnce's 260-character limit.
 
     .PARAMETER appId
     The winget package ID to schedule for uninstall (e.g. 'XP9CXNGPPJ97XX').
+
+    .PARAMETER Target
+    Resolved RunOnce target from Get-RunOnceWingetTarget.
 #>
 function Set-RunOnceWingetTask {
-    param([string]$appId)
+    param(
+        [string]$appId,
+        [PSCustomObject]$Target
+    )
 
-    $targetUserName = if ($script:Params.ContainsKey("Sysprep")) { "Default" } else { $script:Params.Item("User") }
+    if ($null -eq $Target) { $Target = Get-RunOnceWingetTarget }
+
+    $allSucceeded = $true
+    $targetUserNames = if ($Target.AllUsers) {
+        $profileTargets = Get-RunOnceWingetTargetUserNames
+        $allSucceeded = $profileTargets.Success
+        @($profileTargets.UserNames)
+    }
+    else {
+        @($Target.UserName)
+    }
+    if ($targetUserNames.Count -eq 0) { return $false }
 
     # Sanitize appId for use in registry value names (backslashes are path separators)
     $safeAppId = $appId.Replace('\', '_')
 
     $taskName = "Uninstall_$safeAppId"
 
-    # Escape single quotes in appId, then wrap in single quotes so cmd/pwsh metacharacters
-    # like & | < > ^ " are treated as literals. Base64-encode the whole command so the
-    # RunOnce value contains only [A-Za-z0-9+/=] — safe in any shell parser.
-    $escapedAppId = $appId.Replace("'", "''")
-    $wingetCommand = "winget uninstall --accept-source-agreements --disable-interactivity --id '$escapedAppId'"
-    $encodedWingetCommand = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($wingetCommand))
+    # Preserve the ID as one native argument. No cmd.exe or PowerShell interprets its contents.
+    $escapedAppId = $appId -replace '(\\*)"', '$1$1\"'
+    $escapedAppId = $escapedAppId -replace '(\\+)$', '$1$1'
+    $wingetCommand = "winget.exe uninstall --accept-source-agreements --disable-interactivity --id `"$escapedAppId`""
+    if ($wingetCommand.Length -gt 260) {
+        Write-Error "Failed to schedule uninstall task for $($appId): the RunOnce command exceeds 260 characters."
+        return $false
+    }
 
     $operation = [PSCustomObject]@{
         KeyPath       = 'HKEY_USERS\Default\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce'
         ValueName     = $taskName
         ValueType     = 'String'
-        ValueData     = "powershell.exe -NoProfile -EncodedCommand $encodedWingetCommand"
+        ValueData     = $wingetCommand
         OperationType = 'SetValue'
     }
 
-    try {
-        Invoke-WithTargetUserHive -TargetUserName $targetUserName -ScriptBlock {
-            param($op)
-            Invoke-RegistryOperation -Operation $op -RegFilePath '<dynamic>'
-        } -ArgumentObject $operation
-        return $true
+    foreach ($targetUserName in $targetUserNames) {
+        try {
+            Invoke-WithTargetUserHive -TargetUserName $targetUserName -ScriptBlock {
+                param($op)
+                Invoke-RegistryOperation -Operation $op -RegFilePath '<dynamic>'
+            } -ArgumentObject $operation
+        }
+        catch {
+            Write-Error (Get-ConsoleTranslation -Text 'Failed to schedule uninstall task for {0} for ''{1}'': {2}' -FormatArgs @($appId, $targetUserName, $_))
+            $allSucceeded = $false
+        }
     }
-    catch {
-        Write-Error (Get-ConsoleTranslation -Text 'Failed to schedule uninstall task for {0}: {1}' -FormatArgs @($($appId), $_))
-        return $false
-    }
+
+    return $allSucceeded
 }

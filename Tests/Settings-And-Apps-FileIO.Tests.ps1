@@ -6,6 +6,7 @@ BeforeAll {
     . (Join-Path $PSScriptRoot '..\Scripts\FileIO\Import-LanguageFile.ps1')
     . (Join-Path $PSScriptRoot '..\Scripts\Helpers\Add-Parameter.ps1')
     . (Join-Path $PSScriptRoot '..\Scripts\FileIO\Save-ToFile.ps1')
+    . (Join-Path $PSScriptRoot '..\Scripts\Helpers\Windows-BuildHelpers.ps1')
     . (Join-Path $PSScriptRoot '..\Scripts\FileIO\Import-Settings.ps1')
     . (Join-Path $PSScriptRoot '..\Scripts\FileIO\Save-Settings.ps1')
     . (Join-Path $PSScriptRoot '..\Scripts\FileIO\Import-AppsFromFile.ps1')
@@ -18,6 +19,14 @@ BeforeAll {
 }
 
 Describe 'Save-ToFile' {
+    It 'creates the destination directory on first use' {
+        $path = Join-Path $TestDrive 'UserData\LastUsedSettings.json'
+
+        Save-ToFile -Config @{ Setting = $true } -FilePath $path | Should -BeTrue
+
+        (Get-Content -LiteralPath $path -Raw | ConvertFrom-Json).Setting | Should -BeTrue
+    }
+
     It 'reports the write error and returns false when persistence fails' {
         Mock Set-Content { throw [System.IO.IOException]::new('Disk is full') }
         Mock Write-Error {}
@@ -108,6 +117,15 @@ Describe 'Save-Settings' {
 }
 
 Describe 'Import-AppsFromFile' {
+    It 'preserves selected non-ASCII IDs from BOM-less UTF-8 JSON' {
+        $path = Join-Path $TestDrive 'apps-utf8.json'
+        $appId = 'Test.' + [char]0x00E9 + [char]0x4E2D + [char]0x0416
+        $json = @{ Apps = @(@{ AppId = $appId; SelectedByDefault = $true }) } | ConvertTo-Json -Depth 4
+        [System.IO.File]::WriteAllText($path, $json, [System.Text.UTF8Encoding]::new($false))
+
+        @(Import-AppsFromFile -appsFilePath $path) | Should -Be @($appId)
+    }
+
     It 'returns selected IDs, trims whitespace, and supports scalar and array AppId values' {
         $path = Join-Path $TestDrive 'apps.json'
         '{"Apps":[{"AppId":" One.App ","SelectedByDefault":true},{"AppId":["Two.App","  "],"SelectedByDefault":true},{"AppId":"Ignored.App","SelectedByDefault":false}]}' |
@@ -170,9 +188,9 @@ Describe 'Import-AppDetailsFromJson' {
         $apps = @(Import-AppDetailsFromJson)
 
         $apps | Should -HaveCount 1
-        $apps[0].FriendlyName | Should -Be 'Clipchamp'
-        $apps[0].Description | Should -Be 'Video editor from Microsoft'
-        $apps[0].DisplayName | Should -Be 'Clipchamp (Clipchamp.Clipchamp)'
+        $apps[0].FriendlyName | Should -Be 'Microsoft Clipchamp'
+        $apps[0].Description | Should -Be 'Create and edit videos with trimming, captions, and audio'
+        $apps[0].DisplayName | Should -Be 'Microsoft Clipchamp (Clipchamp.Clipchamp)'
     }
 
     It 'skips missing, blank, and non-string app IDs without failing the complete catalog' {
@@ -187,13 +205,26 @@ Describe 'Import-AppDetailsFromJson' {
     }
 
     It 'filters to installed apps using Appx and winget detection' {
-        Mock Get-AppxPackage { param($Name) if ($Name -eq 'Two.App') { [PSCustomObject]@{ Name = $Name } } }
+        Mock Get-AppxPackage { [PSCustomObject]@{ Name = 'Two.App' } }
         Mock Test-AppInWingetList { $false }
 
         $apps = @(Import-AppDetailsFromJson -OnlyInstalled -InstalledList @())
 
         $apps | Should -HaveCount 1
         $apps[0].AppId | Should -Be 'Two.App'
+        Should -Invoke Get-AppxPackage -Times 1 -Exactly
+    }
+
+    It 'detects the current PC Manager package while retaining its legacy ID' {
+        $script:AppsListFilePath = Join-Path $PSScriptRoot '..\Config\Apps.json'
+        Mock Get-AppxPackage { [PSCustomObject]@{ Name = 'Microsoft.MicrosoftPCManager' } }
+        Mock Test-AppInWingetList { $false }
+
+        $apps = @(Import-AppDetailsFromJson -OnlyInstalled -InstalledList @())
+
+        $apps | Should -HaveCount 1
+        $apps[0].FriendlyName | Should -Be 'PC Manager'
+        $apps[0].AppId | Should -Be @('Microsoft.PCManager', 'Microsoft.MicrosoftPCManager')
     }
 
     It 'loads presets and preserves their ID arrays' {
@@ -203,6 +234,32 @@ Describe 'Import-AppDetailsFromJson' {
         $presets[0].Name | Should -Be 'Minimal'
         $presets[0].AppIds -is [array] | Should -BeTrue
         $presets[0].AppIds | Should -Be 'One.App'
+    }
+
+    It 'preserves non-ASCII app IDs and fallback names from BOM-less UTF-8 JSON' {
+        $appId = 'Test.' + [char]0x00E9 + [char]0x4E2D + [char]0x0416
+        $json = @{ Apps = @(@{ AppId = $appId }) } | ConvertTo-Json -Depth 4
+        [System.IO.File]::WriteAllText($script:AppsListFilePath, $json, [System.Text.UTF8Encoding]::new($false))
+
+        $apps = @(Import-AppDetailsFromJson)
+
+        $apps | Should -HaveCount 1
+        $apps[0].AppId | Should -Be @($appId)
+        $apps[0].FriendlyName | Should -Be $appId
+        $apps[0].DisplayName | Should -Be "$appId ($appId)"
+    }
+
+    It 'preserves non-ASCII preset names and IDs from BOM-less UTF-8 JSON' {
+        $presetName = 'Preset ' + [char]0x00E9 + [char]0x4E2D + [char]0x0416
+        $appId = 'Test.' + [char]0x4E2D
+        $json = @{ Presets = @(@{ Name = $presetName; AppIds = @($appId) }) } | ConvertTo-Json -Depth 4
+        [System.IO.File]::WriteAllText($script:AppsListFilePath, $json, [System.Text.UTF8Encoding]::new($false))
+
+        $presets = @(Import-AppPresetsFromJson)
+
+        $presets | Should -HaveCount 1
+        $presets[0].Name | Should -Be $presetName
+        $presets[0].AppIds | Should -Be @($appId)
     }
 
     It 'returns empty collections and reports malformed JSON' {

@@ -6,7 +6,7 @@
 #>
 function Import-AppPresetsFromJson {
     try {
-        $jsonContent = Get-Content -Path $script:AppsListFilePath -Raw | ConvertFrom-Json
+        $jsonContent = Get-Content -Path $script:AppsListFilePath -Raw -Encoding UTF8 | ConvertFrom-Json
     }
     catch {
         Write-Warning (Get-ConsoleTranslation -Text 'Failed to read Apps.json: {0}' -FormatArgs @($_))
