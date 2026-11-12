@@ -197,7 +197,8 @@ function Remove-WinGetApp {
     }
     catch {
         $uninstallCommandSucceeded = $false
-        if ($_.Exception.Message -like 'Operation timed out after *') {
+        $timeoutPattern = Get-ConsoleTranslation -Text 'Operation timed out after {0} seconds' -FormatArgs @('*')
+        if ($_.Exception.Message -like 'Operation timed out after *' -or $_.Exception.Message -like $timeoutPattern) {
             Write-Error (Get-ConsoleTranslation -Text 'WinGet uninstall for {0} did not complete within {1} seconds: {2}' -FormatArgs @($app, $TimeoutSeconds, $_))
         }
         else {

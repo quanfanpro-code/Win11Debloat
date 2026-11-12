@@ -261,6 +261,24 @@ Describe 'Remove-WinGetApp' {
         $script:WingetDeferredRemovals['One.App'] | Should -Be 'Alice'
     }
 
+    It 'reports a WinGet timeout localized by the background helper' {
+        $originalLanguage = $script:ConsoleLanguageCode
+        try {
+            $script:ConsoleLanguageCode = 'zh-CN'
+            $script:Params = @{ User = 'Alice' }
+            Mock Invoke-NonBlocking {
+                throw (Get-ConsoleTranslation -Text 'Operation timed out after {0} seconds' -FormatArgs @(120))
+            }
+
+            Remove-WinGetApp -app 'One.App' | Should -BeFalse
+            Should -Invoke Set-RunOnceWingetTask -Times 1 -Exactly
+            Should -Invoke Write-Error -Times 1 -Exactly
+        }
+        finally {
+            $script:ConsoleLanguageCode = $originalLanguage
+        }
+    }
+
     It 'reports a timed-out winget uninstall and continues' {
         $script:Params = @{ User = 'Alice' }
         Mock Invoke-NonBlocking { throw 'Operation timed out after 120 seconds' }
