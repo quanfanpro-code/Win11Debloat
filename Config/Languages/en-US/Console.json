@@ -342,5 +342,6 @@
   "Unrecognized executable registry setting: {0}": "Unrecognized executable registry setting: {0}",
   "Registry restore blocked: executable settings require explicit user confirmation.": "Registry restore blocked: executable settings require explicit user confirmation.",
   "Registry restore canceled: user did not approve the unrecognized executable settings.": "Registry restore canceled: user did not approve the unrecognized executable settings.",
-  "User approved restoring the unrecognized executable settings.": "User approved restoring the unrecognized executable settings."
+  "User approved restoring the unrecognized executable settings.": "User approved restoring the unrecognized executable settings.",
+  "OEM software (Acer, ASUS, Dell, HP, Lenovo, LG, MSI, Samsung)": "OEM software (Acer, ASUS, Dell, HP, Lenovo, LG, MSI, Samsung)"
 }

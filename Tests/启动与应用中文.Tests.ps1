@@ -55,7 +55,7 @@ Describe '本地中文版完整性' {
     It '应用预设显示中文并保留原应用编号' {
         $presets=@(Import-AppPresetsFromJson)
         $presets[0].Name | Should -Be 'Xbox 游戏应用'
-        $presets[1].Name | Should -Be '厂商预装软件（戴尔、惠普、联想、LG）'
+        $presets[1].Name | Should -Be '厂商预装软件（宏碁、华硕、戴尔、惠普、联想、LG、微星、三星）'
         $presets[0].AppIds | Should -Contain 'Microsoft.GamingApp'
     }
 

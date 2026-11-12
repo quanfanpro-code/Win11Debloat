@@ -342,5 +342,6 @@
   "Unrecognized executable registry setting: {0}": "未识别的可执行注册表设置：{0}",
   "Registry restore blocked: executable settings require explicit user confirmation.": "已阻止注册表还原。可执行设置需要用户明确确认。",
   "Registry restore canceled: user did not approve the unrecognized executable settings.": "已取消注册表还原。用户未批准还原未识别的可执行设置。",
-  "User approved restoring the unrecognized executable settings.": "用户已批准还原未识别的可执行设置。"
+  "User approved restoring the unrecognized executable settings.": "用户已批准还原未识别的可执行设置。",
+  "OEM software (Acer, ASUS, Dell, HP, Lenovo, LG, MSI, Samsung)": "厂商预装软件（宏碁、华硕、戴尔、惠普、联想、LG、微星、三星）"
 }
